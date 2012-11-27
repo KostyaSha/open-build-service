@@ -315,6 +315,7 @@ module ActiveXML
         if not @http
           @http = Net::HTTP.new(url.host, url.port)
           @http.use_ssl = true if url.scheme == "https"
+          @http.verify_mode = OpenSSL::SSL::VERIFY_NONE if url.scheme == "https"
           @http.start
         end
         @http.read_timeout = opt[:timeout]
