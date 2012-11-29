@@ -233,11 +233,11 @@ case "$1" in
         $0 stop
         $0 start
     ;;
-    try-restart)
-        $0 status
-        if test $? = 0; then
-            $0 restart
-    ;;
+  #  try-restart)
+  #      $0 status
+  #      if test $? = 0; then
+  #          $0 restart
+  #  ;;
     reload)
     ;;
     *)
