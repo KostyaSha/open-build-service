@@ -1,0 +1,10 @@
+[Unit]
+Description=OBS publisher daemon
+After=syslog.target
+
+[Service]
+ExecStart=/usr/sbin/obspublisher start
+Type=forking
+
+[Install]
+WantedBy=multi-user.target

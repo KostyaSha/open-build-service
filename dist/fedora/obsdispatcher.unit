@@ -1,0 +1,10 @@
+[Unit]
+Description=OBS dispatcher daemon
+After=syslog.target
+
+[Service]
+ExecStart=/usr/sbin/obsdispatcher start
+Type=forking
+
+[Install]
+WantedBy=multi-user.target

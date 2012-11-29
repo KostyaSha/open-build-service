@@ -1,0 +1,10 @@
+[Unit]
+Description=OBS apidelayed daemon
+After=syslog.target
+
+[Service]
+ExecStart=/usr/sbin/obsapidelayed start
+Type=forking
+
+[Install]
+WantedBy=multi-user.target
