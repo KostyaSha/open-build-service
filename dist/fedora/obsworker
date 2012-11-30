@@ -17,8 +17,8 @@ if test -e /etc/sysconfig/obs-worker; then
 fi
 
 # Determine the base and follow a runlevel link name.
-base=${0##*/}
-link=${base#*[SK][0-9][0-9]}
+#base=${0##*/}
+#link=${base#*[SK][0-9][0-9]}
 
 # Preconfigured by obsstoragesetup runlevel setup script
 if [ -f /etc/buildhost.config ];then
@@ -158,6 +158,9 @@ case "$1" in
         mkdir -p "$workerbootdir"
         pushd "$workerbootdir" > /dev/null
         curl -s "$WORKER_CODE"/getworkercode | cpio --quiet --extract 
+	if [ $? -gt 0 ]; then
+		echo "Can't fetch code" && exit 1
+	fi
         ln -s . XML 
         chmod 755 bs_worker
         popd > /dev/null
