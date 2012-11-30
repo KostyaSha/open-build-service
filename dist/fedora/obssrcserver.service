@@ -3,8 +3,8 @@ Description=OBS obssrcserver daemon
 After=syslog.target
 
 [Service]
-ExecStart=/usr/sbin/obssrcserver start
-ExecStop=/usr/sbin/obssrcserver stop
+ExecStart=/usr/libexec/obssrcserver start
+ExecStop=/usr/libexec/obssrcserver stop
 Type=forking
 
 [Install]

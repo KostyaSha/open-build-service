@@ -3,7 +3,7 @@ Description=OBS warden daemon
 After=syslog.target
 
 [Service]
-ExecStart=/usr/sbin/obswarden start
+ExecStart=/usr/libexec/obswarden start
 Type=forking
 
 [Install]

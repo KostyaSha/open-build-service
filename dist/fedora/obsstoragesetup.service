@@ -3,7 +3,7 @@ Description=OBS storage setup
 After=syslog.target
 
 [Service]
-ExecStart=/usr/sbin/obsstoragesetup start
+ExecStart=/usr/libexec/obsstoragesetup start
 Type=forking
 
 [Install]

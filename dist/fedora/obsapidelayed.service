@@ -3,8 +3,8 @@ Description=OBS apidelayed daemon
 After=syslog.target
 
 [Service]
-ExecStart=/usr/sbin/obsapidelayed start
-ExecStop=/usr/sbin/obsapidelayed stop
+ExecStart=/usr/libexec/obsapidelayed start
+ExecStop=/usr/libexec/obsapidelayed stop
 Type=forking
 User=wwwrun
 Group=www

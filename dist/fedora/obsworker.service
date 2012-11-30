@@ -3,8 +3,8 @@ Description=OBS worker daemon
 After=syslog.target
 
 [Service]
-ExecStart=/usr/sbin/obsworker start
-ExecStop=/usr/sbin/obsworker stop
+ExecStart=/usr/libexec/obsworker start
+ExecStop=/usr/libexec/obsworker stop
 Type=forking
 
 [Install]

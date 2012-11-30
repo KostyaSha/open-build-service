@@ -3,8 +3,8 @@ Description=OBS obsscheduler  daemon
 After=syslog.target
 
 [Service]
-ExecStart=/usr/sbin/obsscheduler start
-ExecStop=/usr/sbin/obsscheduler stop
+ExecStart=/usr/libexec/obsscheduler start
+ExecStop=/usr/libexec/obsscheduler stop
 Type=forking
 
 [Install]

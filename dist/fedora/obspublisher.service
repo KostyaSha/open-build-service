@@ -3,7 +3,7 @@ Description=OBS publisher daemon
 After=syslog.target
 
 [Service]
-ExecStart=/usr/sbin/obspublisher start
+ExecStart=/usr/libexec/obspublisher start
 Type=forking
 
 [Install]
