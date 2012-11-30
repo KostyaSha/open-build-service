@@ -16,30 +16,6 @@ if test -e /etc/sysconfig/obs-worker; then
 . /etc/sysconfig/obs-worker
 fi
 
-# Determine the base and follow a runlevel link name.
-#base=${0##*/}
-#link=${base#*[SK][0-9][0-9]}
-
-# Preconfigured by obsstoragesetup runlevel setup script
-if [ -f /etc/buildhost.config ];then
-    . /etc/buildhost.config
-fi
-
-if [ -z "$OBS_WORKER_DIRECTORY" ]; then
-    OBS_WORKER_DIRECTORY="/var/cache/obs/worker"
-fi
-mkdir -p "$OBS_WORKER_DIRECTORY"
-
-if [ -z "$OBS_RUN_DIR" ]; then
-    OBS_RUN_DIR="/var/run/obs"
-fi
-if [ -z "$OBS_LOG_DIR" ]; then
-    OBS_LOG_DIR="/var/log/obs"
-fi
-if [ -z "$OBS_REPO_SERVERS" ]; then
-    OBS_REPO_SERVERS="localhost:5252"
-fi
-
 if [ -n "$OBS_WORKER_TEST_MODE" ]; then
     OBS_TEST="--test"
 fi

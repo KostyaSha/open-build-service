@@ -4,7 +4,10 @@ After=syslog.target
 
 [Service]
 ExecStart=/usr/sbin/obsapidelayed start
+ExecStop=/usr/sbin/obsapidelayed stop
 Type=forking
+User=wwwrun
+Group=www
 
 [Install]
 WantedBy=multi-user.target

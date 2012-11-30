@@ -6,10 +6,6 @@
 
 . /etc/sysconfig/obs-server
 
-# Determine the base and follow a runlevel link name.
-base=${0##*/}
-link=${base#*[SK][0-9][0-9]}
-
 if [ -z "$OBS_RUN_DIR" ]; then
         OBS_RUN_DIR="/srv/obs/run"
 fi
@@ -27,20 +23,17 @@ rundir="$OBS_RUN_DIR"
 logdir="$OBS_LOG_DIR"
 workdir="/var/tmp/obs_service"
 
-rc_reset
 case "$1" in
 	start)
 		echo -n "Initializing obsservice"
 		mkdir -p "$rundir" "$logdir" "$workdir"
 		chown obsrun:obsrun "$logdir" "$rundir" "$workdir"
 		#startproc -l "$logdir"/src_service.log 
-		"$obsdir"/bs_service --tempdir "$workdir"
-		#rc_status -v
+		"$obsdir"/bs_service --tempdir "$workdir" > "$logdir"/src_service.log 2>&1 
 	;;
 	stop)
 		echo -n "Shutting down obsservice"
 		"$obsdir"/bs_service --stop
-		#rc_status -v
 	;;
 	restart)
 		## If first returns OK call the second, if first or

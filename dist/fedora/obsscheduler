@@ -6,10 +6,6 @@
 
 . /etc/sysconfig/obs-server
 
-# Determine the base and follow a runlevel link name.
-base=${0##*/}
-link=${base#*[SK][0-9][0-9]}
-
 if [ -z "$OBS_RUN_DIR" ]; then
         OBS_RUN_DIR="/srv/obs/run"
 fi

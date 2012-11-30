@@ -4,6 +4,7 @@ After=syslog.target
 
 [Service]
 ExecStart=/usr/sbin/obsworker start
+ExecStop=/usr/sbin/obsworker stop
 Type=forking
 
 [Install]

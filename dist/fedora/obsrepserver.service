@@ -4,6 +4,7 @@ After=syslog.target
 
 [Service]
 ExecStart=/usr/sbin/obsrepserver start
+ExecStop=/usr/sbin/obsrepserver stop
 Type=forking
 
 [Install]

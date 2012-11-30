@@ -1,9 +1,10 @@
 [Unit]
-Description=OBS worker daemon
+Description=OBS service daemon
 After=syslog.target
 
 [Service]
 ExecStart=/usr/sbin/obsservice start
+ExecStop=/usr/sbin/obsservice stop
 Type=forking
 
 [Install]

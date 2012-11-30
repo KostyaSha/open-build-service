@@ -5,16 +5,8 @@
 #         Martin Mohring <martin.mohring@5etech.eu>
 #         Susanne Oberhauser  <froh@novell.com>
 #
-# /etc/init.d/obsdispatcher
-#   and its symbolic  link
-# /usr/sbin/rcobsdispatcher
-#
 
 . /etc/sysconfig/obs-server
-
-# Determine the base and follow a runlevel link name.
-base=${0##*/}
-link=${base#*[SK][0-9][0-9]}
 
 if [ -z "$OBS_RUN_DIR" ]; then
         OBS_RUN_DIR="/srv/obs/run"
@@ -34,12 +26,12 @@ logdir="$OBS_LOG_DIR"
 
 rc_reset
 case "$1" in
-    start)
+    	start)
 		echo -n "Initializing obsdispatcher"
                 # FIXME: not nice, this should receive a proper daemon handling, 
                 #        including real logging, pid file and startproc
 	        #startproc -l "$logdir"/dispatcher.log 
-		"$obsdir"/bs_dispatch
+		"$obsdir"/bs_dispatch > "$logdir"/dispatcher.log 2>&1
 	;;
 	stop)
 		echo -n "Shutting down obsdispatcher"

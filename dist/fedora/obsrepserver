@@ -6,10 +6,6 @@
 
 . /etc/sysconfig/obs-server
 
-# Determine the base and follow a runlevel link name.
-base=${0##*/}
-link=${base#*[SK][0-9][0-9]}
-
 if [ -z "$OBS_RUN_DIR" ]; then
         OBS_RUN_DIR="/srv/obs/run"
 fi
@@ -33,8 +29,8 @@ case "$1" in
 		chown obsrun:obsrun "$logdir" "$rundir"
                 # FIXME: not nice, this should receive a proper daemon handling, 
                 #        including real logging, pid file and startproc
-		startproc -l "$logdir"/rep_server.log 
-		"$obsdir"/bs_repserver
+		#startproc -l "$logdir"/rep_server.log 
+		"$obsdir"/bs_repserver > "$logdir"/rep_server.log 2>&1
 	;;
 	stop)
 		echo -n "Shutting down obsrepserver"

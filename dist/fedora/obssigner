@@ -5,28 +5,8 @@
 #         Martin Mohring <martin.mohring@5etech.eu>
 #         Susanne Oberhauser  <froh@novell.com>
 #
-# /etc/init.d/obssigner
-#   and its symbolic  link
-# /usr/sbin/rcobssigner
-#
-### BEGIN INIT INFO
-# Provides:          obssigner
-# Required-Start:    $time $syslog
-# Required-Stop:     $null
-# Should-Start:      obsstoragesetup
-# Should-Stop:       $none
-# Default-Start:     3 5
-# Default-Stop:      0 1 2 4 6
-# Description:       open build service signer
-### END INIT INFO
-
-. /etc/rc.status
 
 . /etc/sysconfig/obs-server
-
-# Determine the base and follow a runlevel link name.
-base=${0##*/}
-link=${base#*[SK][0-9][0-9]}
 
 if [ -z "$OBS_RUN_DIR" ]; then
         OBS_RUN_DIR="/srv/obs/run"
@@ -44,20 +24,17 @@ fi
 rundir="$OBS_RUN_DIR"
 logdir="$OBS_LOG_DIR"
 
-rc_reset
 case "$1" in
 	start)
 		echo -n "Initializing obssigner"
                 # FIXME: not nice, this should receive a proper daemon handling, 
                 #        including real logging, pid file and startproc
-		startproc -l "$logdir"/signer.log \
-		    "$obsdir"/bs_signer
-		rc_status -v
+		#startproc -l "$logdir"/signer.log \
+		    "$obsdir"/bs_signer > "$logdir"/signer.log 2>&1
 	;;
 	stop)
 		echo -n "Shutting down obssigner"
 		"$obsdir"/bs_signer --stop
-		rc_status -v
 	;;
 	restart)
 		## If first returns OK call the second, if first or

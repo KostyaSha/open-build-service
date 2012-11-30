@@ -19,14 +19,10 @@ if [ "$OBS_STORAGE_AUTOSETUP" != "yes" ]; then
    exit 0
 fi
 
-# Determine the base and follow a runlevel link name.
-base=${0##*/}
-link=${base#*[SK][0-9][0-9]}
-
 if [ -z "$OBS_BASE_DIR" ]; then
-backenddir=/srv/obs
+   backenddir=/srv/obs
 else
-backenddir="$OBS_BASE_DIR"
+   backenddir="$OBS_BASE_DIR"
 fi
 
 if [ -z "$OBS_WORKER_DIRECTORY" ]; then
@@ -66,7 +62,7 @@ case "$1" in
 		# support usage of lvm on md devices
                 if [ -x /sbin/mdadm ]; then
 			/sbin/mdadm --assemble --scan
-			/etc/init.d/boot.lvm start
+			systemctl start lvm
 		fi
 
 		if [ "$OBS_SETUP_WORKER_PARTITIONS" = "take_all" ]; then
