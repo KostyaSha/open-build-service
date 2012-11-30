@@ -4,7 +4,6 @@ After=syslog.target
 
 [Service]
 ExecStart=/usr/libexec/obspublisher start
-Type=forking
 
 [Install]
 WantedBy=multi-user.target

@@ -24,7 +24,6 @@ fi
 rundir="$OBS_RUN_DIR"
 logdir="$OBS_LOG_DIR"
 
-rc_reset
 case "$1" in
     	start)
 		echo -n "Initializing obsdispatcher"
