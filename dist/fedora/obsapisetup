@@ -4,10 +4,6 @@
 # Author: adrian@suse.de
 #
 
-# Determine the base and follow a runlevel link name.
-#base=${0##*/}
-#link=${base#*[SK][0-9][0-9]}
-
 apidir=/srv/www/obs/api
 webuidir=/srv/www/obs/webui
 
@@ -41,6 +37,14 @@ if [ "$?" != "0" ]; then
   fi
   USEIP=$FQHOSTNAME
 fi
+
+#export datadir to check that needed db's exist
+grep '^datadir' /etc/my.cnf > /dev/null 2>&1
+if [ $? -gt 0 ]; then
+   echo "Can't export datadir variable from /etc/my.cnf"
+   exit 1
+fi
+export $(grep '^datadir=' /etc/my.cnf) 
 
 case "$1" in
 	start)
@@ -96,11 +100,11 @@ case "$1" in
 		OBSVERSION=`rpm -q --qf '%{VERSION}' obs-server`
 		OS=`head -n 1 /etc/os-release`
                 RUN_INITIAL_SETUP=""
-                if [ ! -e /obs/MySQL/api_production ]; then
+                if [ ! -e "$datadir"/api_production ]; then
 			echo -n "Initialize MySQL databases (first time only)"
-			mysqladmin -u root -popensuse create api_production
-			mysqladmin -u root -popensuse create webui_production
-			#mysqladmin -u root -p opensuse password "opensuse"
+			mysqladmin -u root create api_production
+			#mysqladmin -u root create webui_production
+			mysqladmin -u root password "opensuse"
                         RUN_INITIAL_SETUP="true"
 		fi
                 if [ -n "$RUN_INITIAL_SETUP" ]; then
