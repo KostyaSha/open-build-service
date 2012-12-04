@@ -30,7 +30,7 @@ case "$1" in
                 # FIXME: not nice, this should receive a proper daemon handling, 
                 #        including real logging, pid file and startproc
 		#startproc -l "$logdir"/src_server.log 
-		"$obsdir"/bs_srcserver > "$logdir"/src_server.log 2>&1
+		exec "$obsdir"/bs_srcserver > "$logdir"/src_server.log 2>&1
 
 		# FIXME:
 

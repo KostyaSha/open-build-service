@@ -29,7 +29,7 @@ case "$1" in
 		mkdir -p "$rundir" "$logdir" "$workdir"
 		chown obsrun:obsrun "$logdir" "$rundir" "$workdir"
 		#startproc -l "$logdir"/src_service.log 
-		"$obsdir"/bs_service --tempdir "$workdir" > "$logdir"/src_service.log 2>&1 
+		exec "$obsdir"/bs_service --tempdir "$workdir" > "$logdir"/src_service.log 2>&1 
 	;;
 	stop)
 		echo -n "Shutting down obsservice"

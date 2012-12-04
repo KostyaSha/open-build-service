@@ -31,7 +31,7 @@ case "$1" in
                 # FIXME: not nice, this should receive a proper daemon handling, 
                 #        including real logging, pid file and startproc
 		#startproc -l "$logdir"/warden.log \
-		    "$obsdir"/bs_warden > "$logdir"/warden.log 2>&1
+		exec "$obsdir"/bs_warden > "$logdir"/warden.log 2>&1
 		#rc_status -v
 	;;
 	stop)
