@@ -311,6 +311,27 @@ class SearchControllerTest < ActionController::IntegrationTest
     assert_no_xml_tag :tag => 'person', :attributes => { :name => "Iggy", :role => "maintainer" }
     assert_xml_tag :tag => 'person', :attributes => { :name => "Iggy", :role => "bugowner" }
 
+    # search by user
+    get "/search/owner?user=fred"
+    assert_response :success
+    assert_xml_tag :tag => 'owner', :attributes => { :rootproject => "home:Iggy", :project => "home:Iggy", :package => "TestPack" }
+
+    get "/search/owner?user=fred&filter=maintainer"
+    assert_response :success
+    assert_xml_tag :tag => 'owner', :attributes => { :rootproject => "home:Iggy", :project => "home:Iggy", :package => "TestPack" }
+
+    get "/search/owner?user=fred&filter=reviewer"
+    assert_response :success
+    assert_xml_tag :tag => 'collection', :children => { :count => 0 }
+
+    # some illegal searches
+    get "/search/owner?user=INVALID&filter=bugowner"
+    assert_response 404
+    assert_xml_tag :tag => 'status', :attributes => { :code => "not_found" }
+    get "/search/owner?user=fred&filter=INVALID"
+    assert_response 404
+    assert_xml_tag :tag => 'status', :attributes => { :code => "not_found" }
+
     # set devel package (this one has another devel package in home:coolo:test)
     pkg = Package.find_by_project_and_name "home:Iggy", "TestPack"
     pkg.develpackage = Package.find_by_project_and_name "kde4", "kdelibs"
@@ -367,7 +388,7 @@ class SearchControllerTest < ActionController::IntegrationTest
     run_scheduler("i586")
     wait_for_publisher()
 
-    get "/search/owner?project=TEMPORARY&binary=package&limit=-1&devel=false"
+    get "/search/owner?project=TEMPORARY&binary=package&limit=0&devel=false"
     assert_response :success
     assert_xml_tag :tag => 'owner', :attributes => { :project => "home:Iggy", :package => "TestPack" }
     assert_xml_tag :tag => 'owner', :attributes => { :project => "TEMPORARY", :package => "pack" }
@@ -388,7 +409,8 @@ class SearchControllerTest < ActionController::IntegrationTest
     assert_no_xml_tag :tag => 'owner', :attributes => { :project => "home:coolo:test" }
     assert_xml_tag :tag => 'group', :attributes => { :name => "test_group", :role => "bugowner" }
 
-    get "/search/owner?project=TEMPORARY&binary=package&deepest=1"
+    # deepest package definition
+    get "/search/owner?project=TEMPORARY&binary=package&limit=-1"
     assert_response :success
     assert_xml_tag :tag => 'owner', :attributes => { :project => "home:coolo:test" }
     assert_no_xml_tag :tag => 'owner', :attributes => { :project => "home:Iggy", :package => "TestPack" }
@@ -412,6 +434,23 @@ class SearchControllerTest < ActionController::IntegrationTest
     assert_xml_tag :tag => 'person', :attributes => { :name => "king", :role => "maintainer" }
     assert_xml_tag :tag => 'group', :attributes => { :name => "test_group", :role => "maintainer" }
 
+    # search for not mantainer packages
+    get "/search/missing_owner"
+    assert_response :success
+    assert_xml_tag :tag => 'collection', :children => { :count => 0 } # all defined
+
+    get "/search/missing_owner?project=TEMPORARY"
+    assert_response :success
+    assert_xml_tag :tag => 'collection', :children => { :count => 0 } # all defined
+
+    get "/search/missing_owner?project=TEMPORARY&filter=bugowner"
+    assert_response :success
+    assert_xml_tag :tag => 'missing_owner', :attributes => { :rootproject => "TEMPORARY", :project => "TEMPORARY", :package => "pack" }
+
+    get "/search/missing_owner?project=TEMPORARY&filter=reviewer"
+    assert_response :success
+    assert_xml_tag :tag => 'missing_owner', :attributes => { :rootproject => "TEMPORARY", :project => "TEMPORARY", :package => "pack" }
+
     # reset devel package setting again
     pkg.develpackage = nil
     pkg.save
@@ -420,6 +459,23 @@ class SearchControllerTest < ActionController::IntegrationTest
     assert_response :success
     delete "/source/home:Iggy/_attribute/OBS:OwnerRootProject"
     assert_response :success
+  end
+
+  def test_search_for_missing_role_defintions_in_all_visible_packages
+    prepare_request_with_user "Iggy", "asdfasdf"
+
+    # search for not mantainer packages
+    get "/search/missing_owner?project=BaseDistro&filter=bugowner"
+    assert_response :success
+    assert_xml_tag :tag => 'missing_owner', :attributes => { :rootproject => "BaseDistro", :project => "BaseDistro", :package => "pack1" }
+    assert_xml_tag :tag => 'missing_owner', :attributes => { :rootproject => "BaseDistro", :project => "BaseDistro", :package => "pack2" }
+    assert_xml_tag :tag => 'missing_owner', :attributes => { :rootproject => "BaseDistro", :project => "BaseDistro", :package => "pack3" }
+
+    get "/search/missing_owner?project=BaseDistro&filter=reviewer"
+    assert_response :success
+    assert_xml_tag :tag => 'missing_owner', :attributes => { :rootproject => "BaseDistro", :project => "BaseDistro", :package => "pack1" }
+    assert_xml_tag :tag => 'missing_owner', :attributes => { :rootproject => "BaseDistro", :project => "BaseDistro", :package => "pack2" }
+    assert_xml_tag :tag => 'missing_owner', :attributes => { :rootproject => "BaseDistro", :project => "BaseDistro", :package => "pack3" }
   end
 
   def test_find_owner_when_binary_exist_in_Update_but_definition_is_in_GA_project

@@ -19,9 +19,8 @@ module ActiveXML
           @xml = Xmlhash.parse( exception.message )
         rescue TypeError
           Rails.logger.error "Couldn't parse error xml: #{self.message[0..120]}"
-          @xml = {'summary' => self.message[0..120], 'code' => '500'}
-          return
         end
+	@xml ||= {'summary' => self.message[0..120], 'code' => '500'}
       end
 
       def api_exception
@@ -401,7 +400,7 @@ module ActiveXML
         raise UnauthorizedError, http_response.read_body.force_encoding("UTF-8")
       when Net::HTTPForbidden
         raise ForbiddenError, http_response.read_body.force_encoding("UTF-8")
-      when Net::HTTPGatewayTimeOut
+      when Net::HTTPGatewayTimeOut, Net::HTTPRequestTimeOut
         raise Timeout::Error
       when Net::HTTPBadGateway
         raise Timeout::Error

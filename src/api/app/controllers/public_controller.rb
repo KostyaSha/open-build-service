@@ -6,7 +6,7 @@ class PublicController < ApplicationController
   skip_before_filter :extract_user
 
   def index
-    redirect_to :controller => 'main'
+    redirect_to controller: "about", action: "index"
   end
 
   def check_package_access(project, package, use_source=true)

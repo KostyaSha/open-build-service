@@ -4,6 +4,10 @@ include ValidationHelper
 
 class SourceController < ApplicationController
 
+  class IllegalRequestError < APIException
+    setup 'illegal_request', 404, "Illegal request"
+  end
+
   validate_action :index => {:method => :get, :response => :directory}
   validate_action :projectlist => {:method => :get, :response => :directory}
   validate_action :packagelist => {:method => :get, :response => :directory}
@@ -918,6 +922,7 @@ class SourceController < ApplicationController
     end
   end
 
+
   # /source/:project/:package/_meta
   def package_meta
     valid_http_methods :put, :get
@@ -926,11 +931,7 @@ class SourceController < ApplicationController
     project_name = params[:project]
     package_name = params[:package]
 
-    unless valid_package_name? package_name
-      render_error :status => 400, :errorcode => "invalid_package_name",
-        :message => "invalid package name '#{package_name}'"
-      return
-    end
+    valid_package_name! package_name
 
     if request.get?
       # GET /source/:project/:package/_meta
@@ -1506,11 +1507,7 @@ class SourceController < ApplicationController
       pkg_name = params[:name]
     end
 
-    unless valid_package_name? pkg_name
-      render_error :status => 400, :errorcode => "invalid_package_name",
-        :message => "invalid package name '#{pkg_name}'"
-      return
-    end
+    valid_package_name! pkg_name
 
     # create patchinfo package
     pkg = nil
@@ -1932,13 +1929,11 @@ class SourceController < ApplicationController
     # Raising permissions afterwards is not secure. Do not allow this by default.
     unless @http_user.is_admin?
       if params[:flag] == "access" and params[:status] == "enable" and not prj.enabled_for?('access', params[:repository], params[:arch])
-        raise Project::ForbiddenError.new("change_project_protection_level",
-                                            "admin rights are required to raise the protection level of a project")
+        raise Project::ForbiddenError.new
       end
       if params[:flag] == "sourceaccess" and params[:status] == "enable" and
           !prj.enabled_for?('sourceaccess', params[:repository], params[:arch])
-        raise Project::ForbiddenError.new("change_project_protection_level",
-                                            "admin rights are required to raise the protection level of a project")
+        raise Project::ForbiddenError.new
       end
     end
 

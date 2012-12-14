@@ -3,6 +3,14 @@ require 'opensuse/backend'
 
 class BsRequest < ActiveRecord::Base
 
+  class InvalidStateError < APIException
+    setup 'request_not_modifiable', 404
+  end
+
+  class InvalidReview < APIException
+    setup 'invalid_review', 400, "request review item is not specified via by_user, by_group or by_project"
+  end
+
   attr_accessible :comment, :creator, :description, :state, :superseded_by
 
   has_many :bs_request_actions, :dependent => :destroy
@@ -229,13 +237,13 @@ class BsRequest < ActiveRecord::Base
       state = state.to_sym
 
       unless self.state == :review || (self.state == :new && state == :new)
-        raise RequestInvalidState.new "request is not in review state"
+        raise InvalidStateError.new "request is not in review state"
       end
       if !opts[:by_user] && !opts[:by_group] && !opts[:by_project]
-        raise ArgumentError.new "request review item is not specified via by_user, by_group or by_project"
+        raise InvalidReview.new
       end
       unless [:new, :accepted, :declined, :superseded].include? state
-        raise RequestInvalidState.new "review state must be new, accepted, declined or superseded, was #{state}"
+        raise InvalidStateError.new "review state must be new, accepted, declined or superseded, was #{state}"
       end
       go_new_state = :review
       go_new_state = state if [:declined, :superseded].include? state
@@ -256,8 +264,9 @@ class BsRequest < ActiveRecord::Base
         if matching && !(reviews_seen.has_key?(rkey) && review.state == :accepted)
           reviews_seen[rkey] = 1
           found = true
-          review.reason = opts[:comment] if opts[:comment]
-          if review.state != state || review.reviewer != User.current.login
+          comment = opts[:comment] || ''
+          if review.state != state || review.reviewer != User.current.login || review.reason != comment
+            review.reason = comment
             review.state = state
             review.reviewer = User.current.login
             review.save!
@@ -274,7 +283,7 @@ class BsRequest < ActiveRecord::Base
         end
       end
           
-      raise ArgumentError, "review item not found" unless found
+      raise Review::NotFound.new unless found
       if go_new_state || state == :superseded
         bs_request_histories.create comment: self.comment, commenter: self.commenter, state: self.state, superseded_by: self.superseded_by        
         
@@ -309,7 +318,7 @@ class BsRequest < ActiveRecord::Base
   def addreview(opts)
     BsRequest.transaction do
       if !opts[:by_user] && !opts[:by_group] && !opts[:by_project]
-        raise ArgumentError.new "request review item is not specified via by_user, by_group or by_project"
+        raise InvalidReview.new
       end
       bs_request_histories.create comment: self.comment, commenter: self.commenter, state: self.state, superseded_by: self.superseded_by        
 
@@ -563,29 +572,29 @@ class BsRequest < ActiveRecord::Base
     self.bs_request_histories.each do |item|
       what, color = "", nil
       case item.state
-        when "new" then
-          if last_history_item && last_history_item.state == "review"
+        when :new then
+          if last_history_item && last_history_item.state == :review
             what, color = "accepted review", "green" # Moving back to state 'new'
-          elsif last_history_item && last_history_item.state == "declined"
+          elsif last_history_item && last_history_item.state == :declined
             what, color = "reopened", "maroon"
           else
             what = "created request" # First history item, regardless of 'state' (may be 'review')
           end
-        when "review" then
+        when :review then
           if !last_history_item # First history item
             what = "created request"
-          elsif last_history_item && last_history_item.state == "declined"
+          elsif last_history_item && last_history_item.state == :declined
             what, color = "reopened review", 'maroon'
           else # Other items...
             what = "added review"
           end
-        when "accepted" then what, color = "accepted request", "green"
-        when "declined" then
+        when :accepted then what, color = "accepted request", "green"
+        when :declined then
           color = "red"
           if last_history_item
             case last_history_item.state
-              when "review" then what = "declined review"
-              when "new" then what = "declined request"
+              when :review then what = "declined review"
+              when :new then what = "declined request"
             end
           end
         when "superseded" then what = "superseded request"
@@ -597,10 +606,10 @@ class BsRequest < ActiveRecord::Base
     end
     last_review_item = nil
     self.reviews.each do |item|
-      if ['accepted', 'declined'].include?(item.state)
-        events[item.created_at] = {:who => item.commenter, :what => "#{item.state} review", :when => item.created_at, :comment => item.comment}
-        events[item.created_at][:color] = "green" if item.state == "accepted"
-        events[item.created_at][:color] = "red" if item.state == "declined"
+      if [:accepted, :declined].include?(item.state)
+        events[item.created_at] = {:who => item.reviewer, :what => "#{item.state} review", :when => item.created_at, :comment => item.reason}
+        events[item.created_at][:color] = "green" if item.state == :accepted
+        events[item.created_at][:color] = "red" if item.state == :declined
       end
       last_review_item = item
     end
@@ -608,18 +617,18 @@ class BsRequest < ActiveRecord::Base
     state, what, color = self.state, "", ""
     comment = self.comment
     case state
-      when "accepted" then what, color = "accepted request", "green"
-      when "declined" then what, color = "declined request", "red"
-      when "new", "review"
+      when :accepted then what, color = "accepted request", "green"
+      when :declined then what, color = "declined request", "red"
+      when :new, :review
         if last_history_item # Last history entry
-          case last_history_item.name
-            when 'review' then
+          case last_history_item.state
+            when :review then
               # TODO: There is still a case left, see sr #106286, factory-auto added a review for autobuild-team, the
               # request # remained in state 'review', but another review was accepted in between. That is kind of hard
               # to grasp from the pack of <history/>, <review/> and <state/> items without breaking # the other cases ;-)
               #what, color = "accepted review for #{last_history_item.value('who')}", 'green'
               what, color = "accepted review", 'green'
-              comment = last_review_item.comment # Yes, the comment for the last history item is in the last review ;-)
+              comment = last_review_item.reason # Yes, the comment for the last history item is in the last review ;-)
             when 'declined' then what, color = 'reopened request', 'maroon'
           end
         else

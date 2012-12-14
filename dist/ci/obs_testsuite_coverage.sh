@@ -60,7 +60,7 @@ setup_api
 echo "Enter API rails root and running rcov"
 cd src/api
 mkdir -p coverage
-rake test --trace || true
+rake test --trace
 cd ../..
 
 echo "Enter WebUI rails root and running rcov"
@@ -69,13 +69,7 @@ setup_webui
 
 cd src/webui
 mkdir -p coverage
-rake test --trace || true
-cd ../..
-
-cd src/webui-testsuite
-# FIXME there is no point in running this at the moment because we need to add means of starting
-# webui and api server under code coverage (easy part) _and_ have jenkins merge the results
-ruby ./run_acceptance_tests.rb || true
+rake test --trace 
 cd ../..
 
 cleanup

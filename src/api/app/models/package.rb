@@ -1,13 +1,25 @@
+require 'api_exception'
+
 class Package < ActiveRecord::Base
   include FlagHelper
 
   class CycleError < Exception; end
-  class DeleteError < Exception
+  class DeleteError < APIException
     attr_accessor :packages
+    setup "delete_error"
   end
-  class ReadAccessError < Exception; end
-  class UnknownObjectError < Exception; end
-  class ReadSourceAccessError < Exception; end
+  class SaveError < APIException
+    setup "package_save_error"
+  end
+  class ReadAccessError < APIException
+    setup 'unknown_package', 404, "Unknown package"
+  end
+  class UnknownObjectError < APIException
+    setup 'unknown_package', 404, "Unknown package"
+  end
+  class ReadSourceAccessError < APIException
+    setup 'source_access_no_permission', 403, "Source Access not allowed"
+  end
   belongs_to :project, foreign_key: :db_project_id
 
   has_many :package_user_role_relationships, :dependent => :destroy, foreign_key: :db_package_id
@@ -685,7 +697,7 @@ class Package < ActiveRecord::Base
     users = package_user_role_relationships.joins(:role, :user).select("users.login as login, roles.title AS role_name")
     if( block )
       users.each do |u|
-        block.call u
+        block.call u.login, u.role_name
       end
     end
     return users
@@ -695,7 +707,7 @@ class Package < ActiveRecord::Base
     groups = package_group_role_relationships.joins(:role, :group).select("groups.title as title, roles.title as role_name")
     if( block )
       groups.each do |g|
-        block.call g
+        block.call g.title, g.role_name
       end
     end
     return groups
@@ -816,12 +828,12 @@ class Package < ActiveRecord::Base
         package.devel( :project => develpackage.project.name, :package => develpackage.name )
       end
 
-      each_user do |u|
-        package.person( :userid => u.login, :role => u.role_name )
+      each_user do |user,role|
+        package.person( :userid => user, :role => role )
       end
 
-      each_group do |g|
-        package.group( :groupid => g.title, :role => g.role_name )
+      each_group do |group,role|
+        package.group( :groupid => group, :role => role )
       end
 
       if view == 'flagdetails'

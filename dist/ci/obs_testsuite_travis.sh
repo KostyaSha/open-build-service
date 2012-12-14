@@ -22,29 +22,17 @@ case $SUBTEST in
   api)
    echo "Enter API rails root and running rcov"
    cd src/api
-   bundle exec rake ci:setup:minitest test CI_REPORTS=results --trace || ret=1
+   bundle exec rake test --trace || ret=1
    ;;
-  webui)
+  webui1|webui2)
    echo "Enter WebUI rails root and running rcov"
    cd src/webui
-   bundle exec rake ci:setup:minitest test CI_REPORTS=results --trace || ret=1
-   ;;
-  webui-testsuite)
-   cd src/webui-testsuite
-   if ! bundle exec ./run_acceptance_tests.rb -f; then
-     ret=1
-     tail -n 500 ../webui/log/test.log
-     cat results/*.source.html
+   if test "$SUBTEST" = "webui2"; then
+     rm -v test/functional/[a-m]*_test.rb
+   else
+     rm -v test/functional/[n-z]*_test.rb
    fi
-   ;;
-  webui-testsuite:*)
-   cd src/webui-testsuite
-   SUBTEST=${SUBTEST/webui-testsuite:/}
-   if ! bundle exec ruby ./run_acceptance_tests.rb -f $SUBTEST; then
-     ret=1
-     tail -n 500 ../webui/log/test.log
-     cat results/*.source.html
-   fi
+   bundle exec rake test --trace || ret=1
    ;;
   webui:*)
    echo "Enter WebUI rails root"
@@ -52,8 +40,10 @@ case $SUBTEST in
    SUBTEST=${SUBTEST/webui:/}
    thetest=${SUBTEST/:*/}
    thename=${SUBTEST/*:/}
-   if test -n "$thename"; then
+   if test "$thename" != "$thetest"; then
      thename="--name=$thename"
+   else
+     thename=
    fi
    if ! bundle exec ruby test/$thetest $thename ; then
      ret=1

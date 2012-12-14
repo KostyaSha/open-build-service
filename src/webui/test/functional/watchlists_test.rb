@@ -17,7 +17,7 @@ class WatchlistTest < ActionDispatch::IntegrationTest
     find(:css, "#toggle_watch > span.desc").click
     page.execute_script("$('#menu-favorites').show();")
 
-    assert_equal "BaseDistro", find(:css, "span.icons-project").text
+    assert_equal "BaseDistro", find(:css, "#menu-favorites span.project-link").text
     assert find(:css, "#menu-favorites").has_text? %r{Remove this project from Watchlist}
     find(:css, "#toggle_watch > span.desc").click
 
@@ -25,10 +25,7 @@ class WatchlistTest < ActionDispatch::IntegrationTest
     assert find(:css, "#menu-favorites").has_text? %r{Add this project to Watchlist}
     find(:css, "#toggle_watch > span.desc").click
 
-    within('#breadcrump') do
-      find(:link, "Projects").click
-    end
-    find(:link, "My:Maintenance").click
+    visit project_show_path(project: "My:Maintenance")
 
     page.execute_script("$('#menu-favorites').show();")
     assert find(:css, "#menu-favorites").has_text? %r{Add this project to Watchlist}

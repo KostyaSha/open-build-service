@@ -3,18 +3,25 @@ require 'opensuse/backend'
 class Project < ActiveRecord::Base
   include FlagHelper
 
-  class CycleError < Exception; end
-  class DeleteError < Exception; end
-  class ReadAccessError < Exception; end
-  class UnknownObjectError < Exception; end
-  class ForbiddenError < Exception
-    def initialize(errorcode, message)
-      @errorcode = errorcode
-      super(message)
-    end
-    def errorcode
-      @errorcode
-    end
+  class CycleError < APIException
+    setup "project_cycle"
+  end
+  class DeleteError < APIException
+    setup "delete_error"
+  end
+  # unknown objects and no read access permission are handled in the same way by default
+  class ReadAccessError < APIException
+    setup 'unknown_project', 404, "Unknown project"
+  end
+  class UnknownObjectError < APIException
+    setup 'unknown_project', 404, "Unknown project"
+  end
+  class SaveError < APIException
+    setup "project_save_error"
+  end
+  class ForbiddenError < APIException
+    setup("change_project_protection_level", 403,
+          "admin rights are required to raise the protection level of a project (it won't be safe anyway)")
   end
 
   before_destroy :cleanup_before_destroy
@@ -264,14 +271,12 @@ class Project < ActiveRecord::Base
     # check for raising read access permissions, which can't get ensured atm
     unless self.new_record? || self.disabled_for?('access', nil, nil)
       if FlagHelper.xml_disabled_for?(xmlhash, 'access')
-        raise ForbiddenError.new("change_project_protection_level",
-                                 "admin rights are required to raise the protection level of a project (it won't be safe anyway)")
+        raise ForbiddenError.new
       end
     end
     unless self.new_record? || self.disabled_for?('sourceaccess', nil, nil)
       if FlagHelper.xml_disabled_for?(xmlhash, 'sourceaccess')
-        raise ForbiddenError.new("change_project_protection_level",
-                                 "admin rights are required to raise the protection level of a project (it won't be safe anyway)")
+        raise ForbiddenError.new
       end
     end
 
@@ -956,7 +961,7 @@ class Project < ActiveRecord::Base
           :mtype => dl.mtype, :arch => dl.architecture.name )
       end
 
-      repos = repositories.not_remote.all
+      repos = repositories.not_remote.sort{ |a,b| b.name <=> a.name }
       if view == 'flagdetails'
         flags_to_xml(builder, expand_flags)
       else
@@ -1182,7 +1187,7 @@ class Project < ActiveRecord::Base
   end
 
   def expand_all_projects
-    projects = [self.name]
+    projects = [self]
     p_map = Hash.new
     projects.each { |i| p_map[i] = 1 } # existing projects map
     # add all linked and indirect linked projects
@@ -1223,7 +1228,7 @@ class Project < ActiveRecord::Base
     return packages
   end
 
-  def extract_maintainer(rootproject, pkg, filter)
+  def extract_maintainer(rootproject, pkg, rolefilter, objfilter=nil)
     return nil unless pkg
     return nil unless Package.check_access?(pkg)
     m = {}
@@ -1232,37 +1237,49 @@ class Project < ActiveRecord::Base
     m[:project] = pkg.project.name
     m[:package] = pkg.name
 
-    pkg.package_user_role_relationships.each do |p|
-      if filter.include? p.role.title
-        m[:users] ||= {}
-        m[:users][p.role.title] ||= []
-        m[:users][p.role.title] << p.user.login
-      end
+    # construct where condition
+    sql = nil
+    rolefilter.each do |rf|
+     if sql.nil?
+       sql = "( "
+     else
+       sql << " OR "
+     end
+     role = Role.find_by_title!(rf)
+     sql << "role_id = " << role.id.to_s
     end
-    pkg.package_group_role_relationships.each do |p|
-      if filter.include? p.role.title
-        m[:groups] ||= {}
-        m[:groups][p.role.title] ||= []
-        m[:groups][p.role.title] << p.group.title
-      end
-    end
+    sql << " )"
+    usersql = groupsql = sql
+    usersql  = sql << " AND bs_user_id = " << objfilter.id.to_s  if objfilter.class == User
+    groupsql = sql << " AND bs_group_id = " << objfilter.id.to_s if objfilter.class == Group
+
+    # lookup
+    pkg.package_user_role_relationships.where(usersql).each do |p|
+      m[:users] ||= {}
+      m[:users][p.role.title] ||= []
+      m[:users][p.role.title] << p.user.login
+    end unless objfilter.class == Group
+
+    pkg.package_group_role_relationships.where(groupsql).each do |p|
+      m[:groups] ||= {}
+      m[:groups][p.role.title] ||= []
+      m[:groups][p.role.title] << p.group.title
+    end unless objfilter.class == User
+
     # did it it match? if not fallback to project level
     unless m[:users] or m[:groups]
       m[:package] = nil
-      pkg.project.project_user_role_relationships.each do |p|
-        if filter.include? p.role.title
-          m[:users] ||= {}
-          m[:users][p.role.title] ||= []
-          m[:users][p.role.title] << p.user.login
-        end
-      end
-      pkg.project.project_group_role_relationships.each do |p|
-        if filter.include? p.role.title
-          m[:groups] ||= {}
-          m[:groups][p.role.title] ||= []
-          m[:groups][p.role.title] << p.group.title
-        end
-      end
+      pkg.project.project_user_role_relationships.where(usersql).each do |p|
+        m[:users] ||= {}
+        m[:users][p.role.title] ||= []
+        m[:users][p.role.title] << p.user.login
+      end unless objfilter.class == Group
+
+      pkg.project.project_group_role_relationships.where(groupsql).each do |p|
+        m[:groups] ||= {}
+        m[:groups][p.role.title] ||= []
+        m[:groups][p.role.title] << p.group.title
+      end unless objfilter.class == User
     end
     # still not matched? Ignore it
     return nil unless  m[:users] or m[:groups]
@@ -1271,13 +1288,122 @@ class Project < ActiveRecord::Base
   end
   private :extract_maintainer
 
-  def find_assignees(binary_name, limit=1, devel=true, filter=["maintainer","bugowner"], deepest=false)
+  def lookup_package_owner(pkg, owner, limit, devel, filter, deepest)
+    # optional check for devel package instance first
+    m = nil
+    m = extract_maintainer(self, pkg.resolve_devel_package, filter, owner) if devel == true
+    m = extract_maintainer(self, pkg, filter, owner) unless m
+
+    # no match, loop about projects below with this package container name
+    pkg_match = pkg
+    unless m
+      pkg.project.expand_all_projects.each do |prj|
+        p = prj.packages.find_by_name(pkg.name )
+        next if p.nil?
+
+        m = extract_maintainer(self, p.resolve_devel_package, filter) if devel == true
+        m = extract_maintainer(self, p, filter) unless m
+        if m
+          pkg_match = p
+          break unless deepest
+        end
+      end
+    end
+
+    # found entry
+    return m, (limit-1)
+  end
+  private :lookup_package_owner
+
+  def find_containers_without_definition(devel=true, filter=["maintainer","bugowner"] )
+    projects=self.expand_all_projects
+
+    roles=[]
+    filter.each do |f|
+      roles << Role.find_by_title!(f)
+    end
+
+    # fast find packages with defintions
+    # user in package object
+    defined_packages = Package.joins(:package_user_role_relationships).where("db_project_id in (?) AND package_user_role_relationships.role_id in (?)", projects, roles).select(:name).map{ |p| p.name}
+    # group in package object
+    defined_packages += Package.joins(:package_group_role_relationships).where("db_project_id in (?) AND package_group_role_relationships.role_id in (?)", projects, roles).select(:name).map{ |p| p.name}
+    # user in project object
+    Project.joins(:project_user_role_relationships).where("projects.id in (?) AND project_user_role_relationships.role_id in (?)", projects, roles).each do |prj|
+      defined_packages += prj.packages.map{ |p| p.name }
+    end
+    # group in project object
+    Project.joins(:project_group_role_relationships).where("projects.id in (?) AND project_group_role_relationships.role_id in (?)", projects, roles).each do |prj|
+      defined_packages += prj.packages.map{ |p| p.name }
+    end
+    if devel == true
+      #FIXME add devel packages, but how do recursive lookup fast in SQL?
+    end
+    defined_packages.uniq!
+
+    all_packages = Package.where("db_project_id in (?)", projects).select(:name).map{ |p| p.name}
+  
+    undefined_packages = all_packages - defined_packages 
+    maintainers=[]
+
+    undefined_packages.each do |p|
+      next if p =~ /\A_product:\w[-+\w\.]*\z/
+
+      pkg = self.find_package(p)
+      
+      m = {}
+      m[:rootproject] = self.name
+      m[:project] = pkg.project.name
+      m[:package] = pkg.name
+
+      maintainers << m
+    end
+
+    return maintainers
+  end
+
+  def find_containers(owner, limit=1, devel=true, filter=["maintainer","bugowner"] )
+    maintainers=[]
+    projects=self.expand_all_projects
+
+    match_all = (limit == 0)
+
+    matched_packages = {}
+    deepest_match = nil
+    projects.each do |project| # project link order
+      next unless project.class == Project
+ 
+      project.packages.each do |pkg| # no order
+
+        next if matched_packages[pkg.name] # already found in upper project
+
+        m, limit = lookup_package_owner(pkg, owner, limit, devel, filter, false)
+
+        next unless m
+
+        # add entry
+        matched_packages[pkg.name] = 1
+        maintainers << m
+        limit = limit - 1
+        return maintainers if limit < 1 and not match_all
+      end
+    end
+
+    maintainers << deepest_match if deepest_match
+
+    return maintainers
+  end
+
+  def find_assignees(binary_name, limit=1, devel=true, filter=["maintainer","bugowner"])
     maintainers=[]
     pkg=nil
     projects=self.expand_all_projects
 
+    match_all = (limit == 0)
+    deepest = (limit < 0)
+
     # binary search via all projects
-    prjlist = projects.map { |p| "@project='#{CGI.escape(p)}'" }
+    prjlist = projects.map { |p| "@project='#{CGI.escape(p.name)}'" }
     path = "/search/published/binary/id?match=(@name='"+CGI.escape(binary_name)+"'"
     path += "+and+("
     path += prjlist.join("+or+")
@@ -1291,53 +1417,26 @@ class Project < ActiveRecord::Base
     deepest_match = nil
     projects.each do |prj| # project link order
       data.elements("binary").each do |b| # no order
-        next unless b["project"] == prj
+        next unless b["project"] == prj.name
 
-        pkg = Package.find_by_project_and_name( prj, b["package"] )
+        pkg = prj.packages.find_by_name( b["package"] )
         next if pkg.nil?
 
-        # optional check for devel package instance first
-        m = nil
-        m = extract_maintainer(self, pkg.resolve_devel_package, filter) if devel == true
-        m = extract_maintainer(self, pkg, filter) unless m
-        # no match, loop about projects below with this package container name
-        unless m
-          found=false
-          projects.each do |belowprj|
-            if belowprj == prj
-              found=true
-              next
-            end
-            if found == true
-              pkg = Package.find_by_project_and_name( belowprj, b["package"] )
-              next if pkg.nil?
+        # the "" means any matching relationships will get taken
+        m, limit = lookup_package_owner(pkg, "", limit, devel, filter, deepest)
 
-              m = extract_maintainer(self, pkg.resolve_devel_package, filter) if devel == true
-              m = extract_maintainer(self, pkg, filter) unless m
-              break if m
-            end
-          end
-        end
-
-        # giving up here
         next unless m
 
-        # avoid double entries
-        found=false
-        maintainers.each do |ma|
-          found=true if ma[:project] == m[:project] and ma[:package] ==  m[:package]
-        end
-        next if found==true
-
-        # add entry
+        # remember as deepest candidate
         if deepest == true
           deepest_match = m
           next
-        else
-          maintainers << m
         end
+
+        # add entry
+        maintainers << m
         limit = limit - 1
-        return maintainers if limit == 0
+        return maintainers if limit < 1 and not match_all
       end
     end
 

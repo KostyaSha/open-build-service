@@ -10,6 +10,7 @@ function copy {
 }
 
 copy $themedir/bento/images/icons/accept.png ./app/assets/icons/accept.png
+copy $themedir/bento/images/icons/application_get.png ./app/assets/icons/application_get.png
 copy $themedir/bento/images/icons/arrow_branch.png ./app/assets/icons/arrow_branch.png
 copy $themedir/bento/images/icons/arrow_down.png ./app/assets/icons/arrow_down.png
 copy $themedir/bento/images/icons/arrow_redo.png ./app/assets/icons/arrow_redo.png
@@ -118,4 +119,6 @@ copy $themedir/bento/images/distributions/opensuse.png ./app/assets/icons/distri
 copy $themedir/bento/images/distributions/redhat.png ./app/assets/icons/distributions-redhat.png
 copy $themedir/bento/images/distributions/suse.png ./app/assets/icons/distributions-suse.png
 copy $themedir/bento/images/distributions/ubuntu.png ./app/assets/icons/distributions-ubuntu.png
+
+copy $themedir/bento/images/globalnav/globalnav-im.png ./app/assets/images/globalnav-im.png
 

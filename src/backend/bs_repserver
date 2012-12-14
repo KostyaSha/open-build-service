@@ -462,7 +462,7 @@ sub getbinarylist_repository {
     my $fd = gensym;
     if (open($fd, '<', "$reporoot/$prp/$arch/:full.solv")) {
       push @files, { 'name' => 'repositorysolv', 'filename' => $fd };
-    } else {
+    } elsif (-d "$reporoot/$prp/$arch") {
       my $pool = BSSolv::pool->new();
       my $repo = addrepo_scan($pool, $prp, $arch);
       if ($repo) {
@@ -1556,7 +1556,7 @@ sub receivekiwitree {
 	    $found = 1;
 	  }
 	}
-      } elsif ($file =~ /\.asc$/s) {
+      } elsif ($file =~ /\.(?:asc|key)$/s) {
 	push @tosign, $file;
       }
       $todo{$file} = 1 unless $found;

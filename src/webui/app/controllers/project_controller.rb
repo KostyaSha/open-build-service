@@ -390,6 +390,7 @@ class ProjectController < ApplicationController
   private :repository_arch_list
 
   def edit_repository
+    check_ajax
     repo = @project.repository[params[:repository]]
     redirect_back_or_to(:controller => "project", :action => "repositories", :project => @project) and return if not repo
     # Merge project repo's arch list with currently available arches from API. This needed as you want
@@ -407,7 +408,11 @@ class ProjectController < ApplicationController
 
   def update_target
     repo = @project.repository[params[:repo]]
-    repo.archs = params[:arch].to_a
+    if params[:arch]
+      repo.archs = params[:arch].keys
+    else
+      repo.archs = []
+    end
     # Merge project repo's arch list with currently available arches from API. This needed as you want
     # to keep currently non-working arches in the project meta.
     @repository_arch_hash = Hash.new
@@ -1049,9 +1054,10 @@ class ProjectController < ApplicationController
   end
 
   def save_prjconf
+    check_ajax
     frontend.put_file(params[:config], :project => params[:project], :filename => '_config')
     flash[:note] = "Project Config successfully saved"
-    redirect_to :action => :prjconf, :project => params[:project]
+    render text: "Config successfully saved", content_type: "text/plain"
   end
 
   def change_flag

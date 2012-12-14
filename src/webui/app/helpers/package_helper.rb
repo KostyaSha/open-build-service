@@ -27,10 +27,10 @@ module PackageHelper
 
   def guess_code_class( filename )
     return 'xml' if ['_aggregate', '_link', '_patchinfo', '_service'].include?(filename) || filename.match(/.*\.service/)
-    return "bash" if filename.match(/^rc[\w-]+$/) # rc-scripts are shell
+    return "shell" if filename.match(/^rc[\w-]+$/) # rc-scripts are shell
     return "python" if filename.match(/^.*rpmlintrc$/)
     return "makefile" if filename == "debian.rules"
-    return "baselibsconf" if filename == "baselibs.conf"
+    return "baselibs" if filename == "baselibs.conf"
     return "spec" if filename.match(/^macros\.\w+/)
     ext = Pathname.new(filename).extname.downcase
     case ext
@@ -43,15 +43,17 @@ module PackageHelper
       when ".rb" then return "ruby"
       when ".tex" then return "latex"
       when ".js" then return "javascript"
+      when ".sh" then return "shell"
     end
-    return ext[1..-1]
+    ext = ext[1..-1]
+    return ext if ['changes', 'spec', 'diff', 'php', 'html', 'xml', 'css', 'perl'].include? ext
+    return ''
   end
 
   include ProjectHelper
 
   def package_bread_crumb( *args )
     args.insert(0, link_to_if(params['action'] != 'show', @package, :controller => :package, :action => :show, :project => @project, :package => @package ))
-    args.insert(0, link_to('Packages', :controller => 'project', :action => 'show', :project => @project))
     project_bread_crumb( *args )
   end
 

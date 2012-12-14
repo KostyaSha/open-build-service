@@ -30,6 +30,7 @@ class ActionDispatch::IntegrationTest
       fill_in 'Password', with: password
       click_button 'Login'
     end
+    @current_user = user
     if do_assert
       assert find('#flash-messages').has_content?("You are logged in now")
     end
@@ -53,8 +54,13 @@ class ActionDispatch::IntegrationTest
   end
 
   def logout
+    @current_user = nil
     ll = page.first('#logout-link')
     ll.click if ll
+  end
+
+  def current_user
+    @current_user
   end
   
   @@display = nil
@@ -76,6 +82,7 @@ class ActionDispatch::IntegrationTest
     end unless ENV['API_STARTED']
     ActiveXML::transport.http_do :post, "/test/test_start"
     Capybara.current_driver = olddriver
+    @starttime = Time.now
   end
 
   teardown do
@@ -92,6 +99,8 @@ class ActionDispatch::IntegrationTest
     Capybara.reset_sessions!
     ActiveXML::transport.http_do(:post, "/test/test_end", timeout: 100)
     Capybara.use_default_driver
+    Rails.cache.clear
+    #puts "#{self.__name__} took #{Time.now - @starttime}"
   end
 
   # ============================================================================
@@ -139,5 +148,13 @@ class ActionDispatch::IntegrationTest
     return :alert if result["class"].include? "alert"
   end
 
+  # helper function for teardown
+  def delete_package project, package
+    visit package_show_path(package: package, project: project)
+    find(:id, 'delete-package').click
+    assert find(:id, 'del_dialog').has_text? 'Delete Confirmation'
+    find_button("Ok").click
+    assert find('#flash-messages').has_text? "Package '#{package}' was removed successfully"
+  end
 
 end

@@ -1,8 +1,13 @@
 require 'net/http'
 require 'benchmark'
+require 'api_exception'
 
 module Suse
   class Backend
+
+    class IllegalEncodingError < APIException
+      setup 'invalid_text_encoding'
+    end
 
     class HTTPError < Exception
       def initialize(resp)
@@ -103,7 +108,7 @@ module Suse
           end
           begin
             http.request backend_request
-          rescue Errno::EPIPE, Errno::ECONNRESET
+          rescue Errno::EPIPE, Errno::ECONNRESET, SocketError, Errno::EINTR, EOFError, IOError 
             raise Timeout::Error
           end
         end

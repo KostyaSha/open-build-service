@@ -210,6 +210,7 @@ OBSApi::Application.routes.draw do
       match 'search/package' => :package
       match 'search/attribute' => :attribute
       match 'search/owner' => :owner
+      match 'search/missing_owner' => :missing_owner
       match 'search/request' => :bs_request
       match 'search/request/id' => :bs_request_id
       match 'search' => :pass_to_backend
@@ -273,6 +274,7 @@ OBSApi::Application.routes.draw do
       match 'public' => :index
       match 'public/build/:project' => :build, :constraints => cons
       match 'public/build/:project/:repository' => :build, :constraints => cons
+      match 'public/build/:project/:repository/:arch' => :build, :constraints => cons
       match 'public/build/:project/:repository/:arch/:package' => :build, :constraints => cons
       match 'public/source/:project' => :project_index, :constraints => cons
       match 'public/source/:project/_meta' => :project_meta, :constraints => cons

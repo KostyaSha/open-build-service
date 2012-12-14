@@ -51,6 +51,11 @@ class ApplicationController < ActionController::Base
     end
   end
 
+  class MissingParameterError < Exception; end
+  rescue_from MissingParameterError do 
+    render :file => "#{Rails.root}/public/404.html", :status => 404, :layout => false
+  end
+
   protected
 
   def set_return_to
@@ -176,7 +181,7 @@ class ApplicationController < ActionController::Base
   def required_parameters(*parameters)
     parameters.each do |parameter|
       unless params.include? parameter.to_s
-        raise ActionController::RoutingError.new "Required Parameter #{parameter} missing"
+        raise MissingParameterError.new "Required Parameter #{parameter} missing in #{request.url}"
       end
     end
   end
@@ -276,6 +281,8 @@ class ApplicationController < ActionController::Base
     
     # now to something fancy - patch HTML5 to look like xhtml 1.1
     xmlbody.gsub!(%r{ data-\S+=\"[^\"]*\"}, ' ')
+    xmlbody.gsub!(%r{ autocomplete=\"[^\"]*\"}, ' ')
+    xmlbody.gsub!(%r{ placeholder=\"[^\"]*\"}, ' ')
     xmlbody.gsub!('<!DOCTYPE html>', '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">')
     xmlbody.gsub!('<html>', '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">') 
 
