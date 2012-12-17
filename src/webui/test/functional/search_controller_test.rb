@@ -6,13 +6,13 @@ class SearchControllerTest < ActionDispatch::IntegrationTest
 
   def validate_search_page
     assert page.find(:id, 'header-logo')
-    assert page.has_text? "Search for Buildservice Projects or Packages"
-    assert page.has_text? "Search term:"
-    assert page.has_text? "Require attribute:"
+    assert page.has_text? "Search"
+    assert page.has_text? "Advanced"
   end
 
-  def search options
+  def search options  
     validate_search_page
+    find("#advanced_link").click
 
     options[:for]    ||= [:projects, :packages]
     options[:in]     ||= [:name]
@@ -24,7 +24,7 @@ class SearchControllerTest < ActionDispatch::IntegrationTest
     title       = page.find(:id, 'title')
     description = page.find(:id, 'description')
 
-    fill_in "Search term:", with: options[:text]
+    fill_in "search_input", with: options[:text]
 
     project.click     if options[:for].include?(:projects) != project.selected?
     package.click     if options[:for].include?(:packages) != package.selected?
@@ -32,9 +32,9 @@ class SearchControllerTest < ActionDispatch::IntegrationTest
     title.click       if options[:in].include?(:title)     != title.selected?
     description.click if options[:in].include?(:description) != description.selected?
     if options[:attribute]
-      select(options[:attribute], from: "Require attribute:")
+      select(options[:attribute], from: "attribute_list")
     end
-    find("#search-term").click
+    find("#search_button").click
 
     if options[:expect] == :success
       if !options[:text].blank?
@@ -46,81 +46,92 @@ class SearchControllerTest < ActionDispatch::IntegrationTest
         search_details = "with attribute \"#{options[:attribute]}\""
       end
       found_text = find("div#content h3").text
-      assert_match found_text, %r{^Search Results #{search_details}\s+\(\d+\)$}, 
-      "'#{found_text}' did not match /^Search Results #{search_details}\s+\(\d+\)$/"
+      assert_match found_text, %r{^Search results #{search_details}}, 
+      "'#{found_text}' did not match /^Search results #{search_details}/"
     elsif options[:expect] == :invalid_search_text
-      assert_equal "Search String must contain at least 2 characters OR you search for an attribute.", flash_message
+      assert_equal "Search string must contain at least two characters.", flash_message
       assert_equal :alert, flash_message_type
       validate_search_page
     elsif options[:expect] == :invalid_search_options
-      #TODO: IMP
+      assert_equal "You have to search for #{options[:text]} in something. Click the advanced button...", flash_message
+      assert_equal :alert, flash_message_type
+      assert search_results.empty?
+      validate_search_page
+    elsif options[:expect] == :no_results
+      assert_equal "Your search did not return any results.", flash_message
+      assert_equal :info, flash_message_type
+      assert search_results.empty?
+      validate_search_page
     end
   end
 
   def search_results
-    raw_results = page.all("table#search_result tr")
+    raw_results = page.all("div.search_result")
     raw_results.collect do |row|
       theclass = row.first("img")["class"]
       case theclass
       when "project"
-        { :type         => :project, 
-          :project_name => row.find("a.project-link").text }
+        { :type         => :project,
+          :project_name => row.find("a.data-title")[:title],
+          :project_title => row.find("a.data-title").text
+        }
       when "package"
         { :type         => :package, 
-          :package_name => row.find("a.package-link").text,
-          :project_name => row.find("a.project-link").text }
+          :package_name => row.find("a.data-title")[:title],
+          :project_name => row.find("span.data-project").text
+        }
       else
         fail "Unrecognized result icon. #{alt}"
       end
     end
   end
-  
-  test "find search link in footer" do
+
+  test "find_search_link_in_footer" do
     visit "/"
     find(:css, "div#footer a.search-link").click
     validate_search_page
   end
   
-  test "basic search functionality" do
-    visit '/search/search'
+  test "basic_search_functionality" do
+    visit '/search'
     validate_search_page
 
-    visit '/search/search?search_text=Base'
+    visit '/search?search_text=Base'
     assert page.has_text?(/Base.* distro without update project/)
     assert page.has_link? 'kdebase'
   end
 
-  test "search by baseurl" do
-    visit '/search/search?search_text=obs://build.opensuse.org/openSUSE:Factory/standard/fd6e76cd402226c76e65438a5e3df693-bash'
+  test "search_by_baseurl" do
+    visit '/search?search_text=obs://build.opensuse.org/openSUSE:Factory/standard/fd6e76cd402226c76e65438a5e3df693-bash'
     assert find('#flash-messages').has_text? "Project not found: openSUSE:Factory"
 
-    visit '/search/search?search_text=obs://foo'
-    assert find('#flash-messages').has_text?(%{obs:// searches are not random})
+    visit '/search?search_text=obs://foo'
+    assert find('#flash-messages').has_text?(%{This disturl does not compute!})
   end
 
-  test "search for home projects" do
+  test "search_for_home_projects" do
   
     visit search_path
 
     search(
-      :text => "Home", 
+      :text => "Home",
       :for  => [:projects],
       :in   => [:title])
 
     results = search_results
     # tom set no description
-    assert !results.include?(:type => :project, :project_name => "home:tom")
-    assert results.include? :type => :project, :project_name => "home:Iggy"
-    assert results.include? :type => :project, :project_name => "home:adrian"
+    assert !results.include?(:type => :project, :project_name => "home:tom", :project_title => "Этёам вокябюч еюж эи")
+    assert results.include? :type => :project, :project_name => "home:Iggy", :project_title => "Iggy Home Project"
+    assert results.include? :type => :project, :project_name => "home:adrian", :project_title => "adrian's Home Project"
     # important match as it's having "home" and not "Home"
-    assert results.include? :type => :project, :project_name => "home:dmayr" 
-    assert results.include? :type => :project, :project_name => "home:Iggy:branches:kde4" 
+    assert results.include? :type => :project, :project_name => "home:dmayr", :project_title => "my home project"
+    assert results.include? :type => :project, :project_name => "home:Iggy:branches:kde4", :project_title => "Iggy Home Project"
     # the api fixtures add home dirs too
     assert results.count >= 4
   end
 
 
-  test "search for subprojects" do
+  test "search_for_subprojects" do
 
     visit search_path
 
@@ -130,8 +141,8 @@ class SearchControllerTest < ActionDispatch::IntegrationTest
       :in   => [:name])
 
     results = search_results
-    assert results.include? :type => :project, :project_name => "home:Iggy:branches:kde4"
-    assert results.count == 1
+    assert results.include? :type => :project, :project_name => "home:Iggy:branches:kde4", :project_title => "Iggy Home Project"
+    assert_equal 1, results.count
   end
 
 
@@ -144,8 +155,9 @@ class SearchControllerTest < ActionDispatch::IntegrationTest
       :for  => [:projects], 
       :in   => [:name])
 
-    assert search_results.include? :type => :project, :project_name => "LocalProject"
-    assert search_results.count == 1
+    results = search_results
+    assert results.include? :type => :project, :project_name => "LocalProject", :project_title => "This project is a local project"
+    assert_equal 1, results.count
   end
 
 
@@ -159,9 +171,9 @@ class SearchControllerTest < ActionDispatch::IntegrationTest
       :in   => [:name])
     
     results = search_results
-    assert results.include? :type => :package, :project_name => "CopyTest",  :package_name => "test"
+    assert results.include? :type => :package, :project_name => "CopyTest", :package_name => "test"
+    assert results.include? :type => :package, :project_name => "home:Iggy", :package_name => "TestPack"
     assert results.include? :type => :package, :project_name => "home:Iggy", :package_name => "ToBeDeletedTestPack"
-    assert results.include? :type => :package, :package_name => "TestPack",  :project_name => "home:Iggy"
     assert_equal 3, results.count
   end
   
@@ -181,29 +193,27 @@ class SearchControllerTest < ActionDispatch::IntegrationTest
   end
 
 
-  test "search non existing by name" do
+  test "search_non_existing_by_name" do
 
     visit search_path
   
     search(
       :text => "no such name, please!", 
       :for  => [:projects, :packages], 
-      :in   => [:name])
-
-    assert search_results.empty?
+      :in   => [:name],
+      :expect => :no_results)
   end
 
 
-  test "search non existing by title" do
+  test "search_non_existing_by_title" do
 
     visit search_path
 
     search(
       :text => "Perhaps a non-existing title.", 
       :for  => [:projects, :packages], 
-      :in   => [:title])
-
-    assert search_results.empty?
+      :in   => [:title],
+      :expect => :no_results)
   end
 
 
@@ -214,22 +224,20 @@ class SearchControllerTest < ActionDispatch::IntegrationTest
     search(
       :text => "Some non-existing description I hope.", 
       :for  => [:projects, :packages], 
-      :in   => [:description])
-
-    assert search_results.empty?
+      :in   => [:description],
+      :expect => :no_results)
   end
 
 
-  test "search non existing by attributes" do
+  test "search_non_existing_by_attributes" do
     visit search_path
 
     search(
       :text => "", 
       :for  => [:projects, :packages], 
       :in   => [],
-      :attribute => "OBS:RequestCloned")
-
-    assert search_results.empty?
+      :attribute => "OBS:RequestCloned",
+      :expect => :no_results)
   end
 
   test "search_for_nothing" do
@@ -237,16 +245,18 @@ class SearchControllerTest < ActionDispatch::IntegrationTest
 
     search(
       :text => "Some empty search.", 
-      :for  => [], 
-      :in   => [:name, :title, :description])
-
-    assert search_results.empty?
+      :for  => [:projects, :packages], 
+      :in   => [:name, :title, :description],
+      :expect => :no_results)
   end
   
-  test "search russian" do
+  test "search_russian" do
     visit search_path
     
-    search(text: "вокябюч", :for  => [:projects, :packages], :in   => [:name, :title, :description])
+    search(
+      text: "вокябюч",
+      :for  => [:projects, :packages],
+      :in   => [:name, :title, :description])
     
     results = search_results
     assert page.has_text? "Этёам вокябюч еюж эи"

@@ -12,7 +12,7 @@ group :assets do
   gem 'compass-rails'
   gem 'jquery-datatables-rails'
   gem 'therubyracer'
-  gem 'codemirror-rails'
+  gem 'codemirror-rails', '~> 2.35'
 end
 
 group :development do

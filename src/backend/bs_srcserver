@@ -1978,6 +1978,8 @@ sub findpackages {
     if ($@ && $@ !~ /^404/) {
       die($@) unless $nonfatal;
       warn($@);
+      push @packids, ':missing_packages' if $nonfatal == 2;
+      return @packids;
     }
     @packids = map {$_->{'name'}} @{($r || {})->{'entry'} || []};
     if ($origins) {
@@ -2499,7 +2501,12 @@ sub getprojpack {
       };
     }
     my @packages;
-    @packages = findpackages($projid, $proj, 1) unless $cgi->{'nopackages'} || $proj->{'remoteurl'};
+    @packages = findpackages($projid, $proj, 2) unless $cgi->{'nopackages'} || $proj->{'remoteurl'};
+    my $missing_packages = grep {$_ eq ':missing_packages'} @packages;
+    if ($missing_packages) {
+      @packages = grep {$_ ne ':missing_packages'} @packages;
+      $jinfo->{'missingpackages'} = 1;
+    }
     next if $repoids && !grep {$repoids->{$_->{'name'}}} @{$proj->{'repository'} || []};
     next if $packids && !grep {$packids->{$_}} @packages;
     for (qw{title description build publish debuginfo useforbuild remoteurl remoteproject download link sourceaccess privacy access lock}) {
@@ -4050,6 +4057,24 @@ sub putfile {
   return ($rev, $BSXML::revision);
 }
 
+sub getsourcediffcache {
+  my ($cgi, $cacheid) = @_;
+
+  my $view = $cgi->{'view'} || '';
+  my $cn = "$diffcache/".substr($cacheid, 0, 2)."/$cacheid";
+  BSWatcher::addfilewatcher($cn) if $BSStdServer::isajax;
+  my $lockc = BSUtil::lockcheck('>>', "$cn.run");
+  my $fd = gensym;
+  if (open($fd, '<', $cn)) {
+    unlink("$cn.run");
+    utime(time, time, $cn);
+    BSWatcher::reply_file($fd, $view eq 'xml' ? 'Content-Type: text/xml' : 'Content-Type: text/plain');
+    return undef;
+  }
+  return undef if $BSStdServer::isajax && !$lockc;
+  die("cache entry '$cacheid' does not exist\n");
+}
+
 sub sourcediff {
   my ($cgi, $projid, $packid) = @_;
 
@@ -4177,6 +4202,12 @@ sub sourcediff {
   }
   local *LF;
   mkdir_p("$diffcache/".substr($cacheid, 0, 2));
+  if (!BSUtil::lockcheck('>>', "$cn.run")) {
+    my @args;
+    push @args, "view=$view" if $view;
+    BSHandoff::handoff($ajaxsocket, "/sourcediffcache/$cacheid", undef, @args);
+    exit(0);
+  }
   BSUtil::lockopen(\*LF, '>>', "$cn.run");
   # retry open, maybe somebody else has created the diff meanwhile
   if (open(F, '<', $cn)) {
@@ -7274,6 +7305,7 @@ my $dispatches_ajax = [
   '/source/$project/$package rev' => \&getfilelist_ajax,
   '/source/$project/$package:package/$filename rev?' => \&getfile,
   '/request/$id:num withkey:bool? oldkey:md5?' => \&getrequest,
+  '/sourcediffcache/$cacheid:md5 view:?' => \&getsourcediffcache,
 ];
 
 ####################################################################
