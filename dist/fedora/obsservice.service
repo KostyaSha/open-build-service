@@ -5,7 +5,6 @@ After=syslog.target
 [Service]
 ExecStart=/usr/libexec/obsservice start
 ExecStop=/usr/libexec/obsservice stop
-Type=forking
 
 [Install]
 WantedBy=multi-user.target
