@@ -342,7 +342,6 @@ end
     subprojectmeta="<project name='kde4:subproject'><title></title><description/></project>"
 
     # nobody
-    reset_auth 
     put url_for(:controller => :source, :action => :project_meta, :project => "kde4:subproject"), subprojectmeta
     assert_response 401
     prepare_request_with_user "tom", "thunder"
@@ -1384,7 +1383,6 @@ end
   end
   
   def test_get_project_meta_history
-    reset_auth 
     get "/source/kde4/_project/_history"
     assert_response 401
     prepare_request_with_user "fredlibs", "geröllheimer"
@@ -1417,7 +1415,6 @@ end
   end
 
   def test_remove_and_undelete_operations
-    reset_auth 
     delete "/source/kde4/kdelibs"
     assert_response 401
     delete "/source/kde4"
@@ -1658,7 +1655,6 @@ end
   end
 
   def test_pattern
-    reset_auth 
     put "/source/kde4/_pattern/mypattern", load_backend_file("pattern/digiKam.xml")
     assert_response 401
 
@@ -1706,7 +1702,6 @@ end
   end
 
   def test_prjconf
-    reset_auth 
     get url_for(:controller => :source, :action => :project_config, :project => "DoesNotExist")
     assert_response 401
     prepare_request_with_user "adrian_nobody", "so_alone"
@@ -1727,7 +1722,6 @@ end
   end
 
   def test_pubkey
-    reset_auth 
     prepare_request_with_user "tom", "thunder"
     get url_for(:controller => :source, :action => :project_pubkey, :project => "DoesNotExist")
     assert_response 404
@@ -1754,7 +1748,7 @@ end
     assert_response :success
     assert_xml_tag( :tag => "directory", :attributes => { :count => "2" } )
     assert_xml_tag( :tag => "entry", :attributes => { :name => "pack2", :originproject => "BaseDistro2.0" } )
-    assert_xml_tag( :tag => "entry", :attributes => { :name => "pack2_linked", :originproject => "BaseDistro2.0" } )
+    assert_xml_tag( :tag => "entry", :attributes => { :name => "pack2.linked", :originproject => "BaseDistro2.0" } )
 
     # pack2 exists only via linked project
     get "/source/BaseDistro2.0:LinkedUpdateProject/pack2"
@@ -1787,7 +1781,7 @@ end
     assert_response :success
     post "/source/BaseDistro2.0:LinkedUpdateProject/pack2", :cmd => "branch"
     assert_response :success
-    post "/source/BaseDistro2.0:LinkedUpdateProject/pack2_linked", :cmd => "linkdiff"
+    post "/source/BaseDistro2.0:LinkedUpdateProject/pack2.linked", :cmd => "linkdiff"
     assert_response :success
 
     # read-write user, binary operations must be allowed
@@ -2232,7 +2226,6 @@ end
   end
 
   def test_delete_and_undelete_permissions
-    reset_auth 
     delete "/source/kde4/kdelibs"
     assert_response 401
     delete "/source/kde4"
@@ -2272,7 +2265,6 @@ end
   end
 
   def test_branch_package_delete_and_undelete
-    reset_auth 
     post "/source/home:Iggy/TestPack", :cmd => :branch, :target_project => "home:coolo:test"
     assert_response 401
     prepare_request_with_user "fredlibs", "geröllheimer"

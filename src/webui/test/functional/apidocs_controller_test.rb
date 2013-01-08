@@ -11,10 +11,15 @@ class ApidocsControllerTest < ActionDispatch::IntegrationTest
 
   def test_subpage
     visit "/apidocs/whatisthis"
-    assert find('#flash-messages').has_text? "File not found"
+    find('#flash-messages').must_have_text "File not found"
 
     visit "/apidocs/project.xml"
     assert page.html =~ %r{project name="superkde"}
   end
 
+  def test_broken_apidocs_setup
+    ApidocsController.any_instance.stubs(:indexpath).returns(nil)
+    visit "/apidocs"
+    page.wont_have_link 'Example'
+  end
 end

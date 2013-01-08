@@ -1443,7 +1443,6 @@ class SourceController < ApplicationController
     valid_http_methods :post
     project_name = params[:project]
     oproject = params[:oproject]
-    repository = params[:repository]
 
     oprj = Project.get_by_name( oproject )
 
@@ -1748,7 +1747,7 @@ class SourceController < ApplicationController
     pack = Package.find_by_project_and_name( params[:project], params[:package] )
     if pack # in case of _project package
       pack.set_package_kind_from_commit(answer)
-      pack.update_activity
+      pack.sources_changed
     end
 
     if params[:package] == "_product"

@@ -165,8 +165,8 @@ OBSApi::Application.routes.draw do
       match 'statistics/latest_updated' => :latest_updated
       match 'statistics/global_counters' => :global_counters
       match 'statistics/latest_built' => :latest_built
-      match 'statistics/get_limit' => :get_limit
 
+      match 'statistics/active_request_creators/:project' => :active_request_creators
     end
 
     ### /status_message
@@ -266,7 +266,11 @@ OBSApi::Application.routes.draw do
 
     ### /distributions
 
-    match 'distributions' => 'distribution#index'
+    match '/distributions' => 'distributions#upload', via: :put
+    # as long as the distribution IDs are integers, there is no clash
+    match '/distributions/include_remotes' => 'distributions#include_remotes', via: :get
+    # update is missing here
+    resources :distributions, only: [:index, :show, :create, :destroy]
 
     ### /public
     

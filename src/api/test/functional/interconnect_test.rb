@@ -6,7 +6,6 @@ class InterConnectTests < ActionController::IntegrationTest
   fixtures :all
    
   def test_anonymous_access
-    reset_auth 
     get "/public/lastevents" # OBS 2.1
     assert_response :success
     assert_xml_tag :tag => "events", :attributes => {:sync => "lost"}
@@ -156,7 +155,7 @@ class InterConnectTests < ActionController::IntegrationTest
     get "/source/RemoteInstance:BaseDistro2.0:LinkedUpdateProject?expand=1"
     assert_response :success
     assert_xml_tag( :tag => "entry", :attributes => { :name => "pack2", :originproject => "RemoteInstance:BaseDistro2.0" } )
-    assert_xml_tag( :tag => "entry", :attributes => { :name => "pack2_linked", :originproject => "RemoteInstance:BaseDistro2.0" } )
+    assert_xml_tag( :tag => "entry", :attributes => { :name => "pack2.linked", :originproject => "RemoteInstance:BaseDistro2.0" } )
     # test binary operations
     prepare_request_with_user "king", "sunflower"
     post "/build/RemoteInstance:BaseDistro", :cmd => "wipe", :package => "pack1"
@@ -233,13 +232,16 @@ class InterConnectTests < ActionController::IntegrationTest
     get "/source/UseRemoteInstance"
     assert_response :success
     assert_xml_tag( :tag => "directory", :attributes => { :count => "0" } )
-if $ENABLE_BROKEN_TEST
-#FIXME2.4: backend does not support expand=1 yet
     get "/source/UseRemoteInstance?expand=1"
     assert_response :success
+if $ENABLE_BROKEN_TEST
+#FIXME2.4: remote packages get not added yet.
     assert_xml_tag( :tag => "directory", :attributes => { :count => "1" } )
     assert_xml_tag( :tag => "entry", :attributes => { :name => "pack1", :originproject => "BaseDistro2.0" } )
 end
+    get "/build/UseRemoteInstance/pop/i586/pack1/_log"
+    assert_response 400
+    assert_match(/remote error: pack1  no logfile/, @response.body) # we had no build, but request reached backend
     # test source modifications
     post "/build/UseRemoteInstance/pack1", :cmd => "set_flag"
     assert_response 403

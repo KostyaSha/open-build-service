@@ -71,6 +71,7 @@ module ActiveXML
       uri = URI( target )
       replace_server_if_needed( uri )
       #logger.debug "setting up transport for model #{model}: #{uri} opts: #{opt}"
+      raise "overwriting #{model}" if @mapping.has_key? model
       @mapping[model] = {:target_uri => uri, :opt => opt}
     end
 
@@ -388,6 +389,40 @@ module ActiveXML
       end
 
       return handle_response( http_response )
+    end
+    
+    def load_external_url(uri)
+      uri = URI.parse(uri)
+      http = nil
+      content = nil
+      proxyuri = ENV['http_proxy']
+      proxyuri = CONFIG['http_proxy'] unless CONFIG['http_proxy'].blank?
+      if proxyuri
+        proxy = URI.parse(proxyuri)
+        proxy_user, proxy_pass = proxy.userinfo.split(/:/) if proxy.userinfo
+        http = Net::HTTP::Proxy(proxy.host, proxy.port, proxy_user, proxy_pass).new(uri.host, uri.port)
+      else
+        http = Net::HTTP.new(uri.host, uri.port)
+      end
+      http.use_ssl = (uri.scheme == 'https')
+      begin
+        http.start
+        response = http.get uri.request_uri
+        if response.is_a?(Net::HTTPSuccess)
+          content = response.body
+        end
+      rescue SocketError, Errno::EINTR, Errno::EPIPE, EOFError, Net::HTTPBadResponse, IOError, 
+        Errno::ETIMEDOUT, Errno::ECONNREFUSED, Timeout::Error => err
+        logger.debug "#{err} when fetching #{uri.to_s}"
+        http = nil
+      end
+      http.finish if http && http.started?
+      return content
+    end
+
+    # small helper function to avoid having to hardcode the content_type all around
+    def http_json(method, uri, data)
+      http_do method, uri, data: data.to_json, content_type: "application/json"
     end
 
     def handle_response( http_response )

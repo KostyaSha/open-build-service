@@ -75,7 +75,7 @@ class RequestControllerTest < ActionController::IntegrationTest
     post "/request/#{id}?cmd=changestate&newstate=new&comment=oops"
     assert_response :success
     Timecop.freeze(1)
-    post "/request/#{id}?cmd=changestate&newstate=accepted"
+    post "/request/#{id}?cmd=changestate&newstate=accepted&comment=approved"
     assert_response :success
 
     # package got created
@@ -105,7 +105,7 @@ class RequestControllerTest < ActionController::IntegrationTest
           "options"=>{"sourceupdate"=>"cleanup"}, 
           "acceptinfo"=>{"rev"=>"1", "srcmd5"=>"1ded65e42c0f04bd08075dfd1fd08105", "osrcmd5"=>"d41d8cd98f00b204e9800998ecf8427e"}
         }, 
-        "state"=>{"name"=>"accepted", "who"=>"Iggy", "when"=>"2010-07-12T00:00:03", "comment"=>"DESCRIPTION IS HERE"}, 
+        "state"=>{"name"=>"accepted", "who"=>"Iggy", "when"=>"2010-07-12T00:00:03", "comment"=>"approved"}, 
         "history"=>[
                     {"name"=>"new", "who"=>"Iggy", "when"=>"2010-07-12T00:00:00"}, 
                     {"name"=>"declined", "who"=>"Iggy", "when"=>"2010-07-12T00:00:01", "comment"=>'notgood'}, 
@@ -266,7 +266,6 @@ class RequestControllerTest < ActionController::IntegrationTest
 
   # FIXME: we need a way to test this with api anonymous config and without
   def test_create_request_anonymous
-    reset_auth
     post "/request?cmd=create", load_backend_file('request/add_role')
     assert_response 401
   end
@@ -374,7 +373,6 @@ class RequestControllerTest < ActionController::IntegrationTest
   end
 
   def test_create_request_and_supersede
-    reset_auth
     req = load_backend_file('request/works')
 
     prepare_request_with_user "Iggy", "asdfasdf"
@@ -459,8 +457,6 @@ class RequestControllerTest < ActionController::IntegrationTest
 
   # MeeGo BOSS: is using multiple reviews by same user for each step
   def test_create_request_and_multiple_reviews
-    reset_auth
-
     # the birthday of J.K.
     Timecop.freeze(2010, 7, 12)
 
@@ -624,7 +620,6 @@ class RequestControllerTest < ActionController::IntegrationTest
   end
   
   def test_change_review_state_after_leaving_review_phase
-    reset_auth
     req = load_backend_file('request/works')
 
     prepare_request_with_user "Iggy", "asdfasdf"
@@ -1063,7 +1058,6 @@ end
   end
 
   def test_create_and_revoke_submit_request_permissions
-    reset_auth
     req = "<request>
              <action type='submit'>
                <source project='home:Iggy' package='TestPack' rev='1' />
