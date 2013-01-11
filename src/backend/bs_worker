@@ -2021,6 +2021,7 @@ sub dobuild {
   push @args, '--norootforbuild' unless $BSConfig::norootexceptions && grep {"$projid/$packid" =~ /^$_$/} keys %$BSConfig::norootexceptions;
   push @args, '--baselibs-internal';
   push @args, '--lint';
+  push @args, '--statistics';
   push @args, '--dist', "$buildroot/.build.config";
   push @args, '--rpmlist', "$buildroot/.build.rpmlist";
   push @args, '--logfile', "$buildroot/.build.log";
@@ -2095,15 +2096,17 @@ sub dobuild {
         chomp;
         my ($key, $value) = split( ": ", $_ );
         if ($key eq "MAX_mb_used_on_disk" ){
-          $stats->{'disk'}->{'max_usage'} = $value;
+          $stats->{'disk'}->{'usage'}->{'size'}->{'unit'} = "M";
+          $stats->{'disk'}->{'usage'}->{'size'}->{'_content'} = $value;
         } elsif ($key eq "MAX_mb_used_memory" ){
-          $stats->{'memory'}->{'max_usage'} = $value;
+          $stats->{'memory'}->{'usage'}->{'size'}->{'unit'} = "M";
+          $stats->{'memory'}->{'usage'}->{'size'}->{'_content'} = $value;
         } elsif ($key eq "IO_requests_read" || $key eq "IO_requests_write" ){
           $iorequests += $value;
-          $stats->{'disk'}->{'io_requests'} = $iorequests;
+          $stats->{'disk'}->{'usage'}->{'io_requests'} = $iorequests;
         } elsif ($key eq "IO_sectors_read" || $key eq "IO_sectors_write" ){
           $iosectors += $value;
-          $stats->{'disk'}->{'io_sectors'} = $iosectors;
+          $stats->{'disk'}->{'usage'}->{'io_sectors'} = $iosectors;
         }
       }
       close FILE;
