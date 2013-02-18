@@ -509,6 +509,7 @@ our $buildinfo = [
 	    'server',
      ]],
 	'expanddebug',
+	'followupfile',	# for two-stage builds
 ];
 
 our $jobstatus = [
@@ -1509,8 +1510,16 @@ our $time = [
 our $constraints = [
   'constraints' => 
     [],
-    'hostlabel', # workers might get labels defined by admin, for example for benchmarking.
-    'sandbox',   # xen/kvm/chroot/secure
+  [ 'hostlabel' =>
+       'exclude',   # true or false. default is false.
+       [],
+       '_content' # workers might get labels defined by admin, for example for benchmarking.
+  ],
+  [ 'sandbox' =>
+       'exclude',   # true or false. default is false.
+       [],
+       '_content' # xen/kvm/chroot/secure
+  ],
   [ 'linux' =>
       [ 'version' =>
         [],
@@ -1526,6 +1535,7 @@ our $constraints = [
 	'processors',
       [ 'disk' => $size ],
       [ 'memory' => $size ],
+      [ 'physicalmemory' => $size ],
   ],
 ];
 
@@ -1545,7 +1555,7 @@ our $buildstatistics = [
 	[ 'memory' =>
               [ 'usage' => $size ],
         ],
-	[ 'time' =>
+	[ 'times' =>
               [ 'total' => $time ],
               [ 'preinstall' => $time ],
               [ 'install' => $time ],

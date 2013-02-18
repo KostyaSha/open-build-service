@@ -1236,6 +1236,7 @@ class Project < ActiveRecord::Base
     m[:rootproject] = rootproject.name
     m[:project] = pkg.project.name
     m[:package] = pkg.name
+    m[:filter] = rolefilter
 
     # construct where condition
     sql = nil
@@ -1399,7 +1400,8 @@ class Project < ActiveRecord::Base
     return maintainers
   end
 
-  def find_assignees(binary_name, limit=1, devel=true, filter=["maintainer","bugowner"])
+  def find_assignees(binary_name, limit=1, devel=true, filter=["maintainer","bugowner"], webui_mode=false)
+    instances_without_definition=[]
     maintainers=[]
     pkg=nil
     projects=self.expand_all_projects
@@ -1431,7 +1433,12 @@ class Project < ActiveRecord::Base
         # the "" means any matching relationships will get taken
         m, limit, already_checked = lookup_package_owner(pkg, "", limit, devel, filter, deepest, already_checked)
 
-        next unless m
+        unless m
+          # collect all no matched entries
+          m = { :rootproject => self.name, :project => pkg.project.name, :package => pkg.name, :filter => filter }
+          instances_without_definition << m
+          next
+        end
 
         # remember as deepest candidate
         if deepest == true
@@ -1439,12 +1446,14 @@ class Project < ActiveRecord::Base
           next
         end
 
-        # add entry
+        # add matching entry
         maintainers << m
         limit = limit - 1
         return maintainers if limit < 1 and not match_all
       end
     end
+
+    return instances_without_definition if webui_mode and maintainers.length < 1
 
     maintainers << deepest_match if deepest_match
 

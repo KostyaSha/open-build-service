@@ -28,6 +28,8 @@ OBSWebUI::Application.routes.draw do
 
   controller :configuration do
     match 'configuration/' => :index
+    match 'configuration/users' => :users
+    match 'configuration/groups' => :groups
     match 'configuration/connect_instance' => :connect_instance
     match 'configuration/save_instance' => :save_instance
     match 'configuration/update_configuration' => :update_configuration, via: :post
@@ -72,6 +74,7 @@ OBSWebUI::Application.routes.draw do
     match 'package/binaries' => :binaries
     match 'package/users' => :users
     match 'package/requests' => :requests
+    match 'package/statistics' => :statistics
     match 'package/commit' => :commit
     match 'package/revisions' => :revisions
     match 'package/submit_request_dialog' => :submit_request_dialog
@@ -220,6 +223,8 @@ OBSWebUI::Application.routes.draw do
     match 'request/delete_request' => :delete_request, via: :post
     match 'request/add_role_request_dialog' => :add_role_request_dialog
     match 'request/add_role_request' => :add_role_request, via: :post
+    match 'request/set_bugowner_request_dialog' => :set_bugowner_request_dialog
+    match 'request/set_bugowner_request' => :set_bugowner_request, via: :post
     match 'request/change_devel_request_dialog' => :change_devel_request_dialog
     match 'request/change_devel_request' => :change_devel_request
     match 'request/set_incident_dialog' => :set_incident_dialog

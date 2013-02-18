@@ -33,6 +33,12 @@ class RequestControllerTest < ActionController::IntegrationTest
     assert_response 401
   end
 
+  def test_create_invalid
+    prepare_request_with_user "king", "sunflower"
+    post "/request?cmd=create", "GRFZL"
+    assert_response 400
+  end
+
   def test_submit_request_of_new_package
     prepare_request_with_user "Iggy", "asdfasdf"
     post "/source/home:Iggy/NEW_PACKAGE", :cmd => :branch
@@ -253,6 +259,14 @@ class RequestControllerTest < ActionController::IntegrationTest
     post "/request?cmd=create", load_backend_file('request/set_bugowner_fail')
     assert_response 404
     assert_xml_tag( :tag => "status", :attributes => { :code => 'unknown_package' } )
+
+    post "/request?cmd=create", load_backend_file('request/set_bugowner_fail_unknown_user')
+    assert_response 404
+    assert_xml_tag( :tag => "status", :attributes => { :code => 'not_found' } )
+
+    post "/request?cmd=create", load_backend_file('request/set_bugowner_fail_unknown_group')
+    assert_response 404
+    assert_xml_tag( :tag => "status", :attributes => { :code => 'not_found' } )
 
     # test direct put
     prepare_request_with_user "Iggy", "asdfasdf"
@@ -2123,6 +2137,11 @@ end
     node = ActiveXML::Node.new(@response.body)
     assert node.has_attribute?(:id)
     iddelete = node.value('id')
+    post "/request?cmd=create", rq
+    assert_response :success
+    node = ActiveXML::Node.new(@response.body)
+    assert node.has_attribute?(:id)
+    iddelete2 = node.value('id')
     
     prepare_request_with_user "Iggy", "asdfasdf"
     post "/request/#{iddelete}?cmd=changestate&newstate=accepted"
@@ -2136,6 +2155,12 @@ end
     assert_response :success
     assert_xml_tag :parent => { :tag => 'repository', :attributes => { :name => "base" } },
                    :tag => 'path', :attributes => { :project => "deleted", :repository => "deleted" }
+
+    # try again and fail
+    prepare_request_with_user "Iggy", "asdfasdf"
+    post "/request/#{iddelete2}?cmd=changestate&newstate=accepted"
+    assert_response 400
+    assert_xml_tag( :tag => "status", :attributes => { :code => 'repository_missing' } )
 
     # cleanup
     delete "/source/home:Iggy:todo"

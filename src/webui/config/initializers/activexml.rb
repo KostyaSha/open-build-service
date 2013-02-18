@@ -43,7 +43,8 @@ map = ActiveXML::setup_transport(CONFIG['frontend_protocol'], CONFIG['frontend_h
     map.connect :tag, "rest:///user/:user/tags/:project/:package",
       :tags_by_object => "rest:///source/:project/:package/_tags"
 
-    map.connect :person, "rest:///person/:login"
+    map.connect :person, "rest:///person/:login",
+      :all => "rest:///person/"
     map.connect :group, "rest:///group/:title",
       :all => "rest:///group/"
     map.connect :persongroup, "rest:///person/:login/group"
@@ -69,6 +70,7 @@ map = ActiveXML::setup_transport(CONFIG['frontend_protocol'], CONFIG['frontend_h
 
     map.connect :buildresult, "rest:///build/:project/_result?:view&:package&:code&:lastbuild&:arch&:repository"
     map.connect :fileinfo, "rest:///build/:project/:repository/:arch/:package/:filename?:view"
+    map.connect :statistic, "rest:///build/:project/:repository/:arch/:package/_statistics"
 
     map.connect :result, "rest:///result/:project/:platform/:package/:arch/result"
     map.connect :packstatus, "rest:///result/:project/packstatus?:command"

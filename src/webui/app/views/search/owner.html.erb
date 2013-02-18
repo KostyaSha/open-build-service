@@ -12,6 +12,7 @@
 
 <div class="grid_16 alpha omega box box-shadow">
 <%= render :partial => 'tabs' %>
+  <h3>Search for people responsible for package:</h3>
   <div id="search_form">
   <%= form_tag({:controller => 'search', :action => 'owner'}, {:method => :get}) do -%>
   <p>
@@ -79,4 +80,18 @@
   <% end %>
   </div> <!-- end search_form -->
 <%= render :partial => 'results' %>
+
+<% unless @results.nil? || @results.length < 1 %>
+  <div>
+  <% projects = [] %>
+  <% @results.each do |result| %>
+    <% link = Hash["project", result[:data].project, "package", result[:data].package ] %>
+    <% projects << link %>
+  <% end %>
+    <p>
+      <%= link_to(image_tag('user_add.png', :title => "Request bugowner change"), {:controller => :request, :action => :set_bugowner_request_dialog, :projects => projects}, :remote => true) %>
+      <%= link_to("Request bugowner change", {:controller => :request, :action => :set_bugowner_request_dialog, :projects => projects}, :remote => true) %>
+    </p>
+  </div>
+<% end %>
 </div>

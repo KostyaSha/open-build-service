@@ -368,6 +368,23 @@ sub getpackagebinaryversionlist {
   return ({ 'binaryversionlist' => \@res }, $BSXML::packagebinaryversionlist);
 }
 
+# the worker thinks that out packagebinaryversionlist contains bogus entries
+sub badpackagebinaryversionlist {
+  my ($cgi, $projid, $repoid, $arch, $packids) = @_;
+  my $dir = "$reporoot/$projid/$repoid/$arch";
+  my $gbininfo = read_gbininfo($dir);
+  if ($gbininfo) {
+    $packids = [ sort keys %$gbininfo ] unless $packids;
+    for my $packid (@$packids) {
+      unlink("$dir/$packid/.bininfo");
+    }
+    unlink("$dir/:bininfo");
+    unlink("$dir/:bininfo.merge");
+    forwardevent($cgi, 'scanprjbinaries', $projid, $packids->[0], $repoid, $arch);
+  }
+  return $BSStdServer::return_ok;
+}
+
 sub getbinaries {
   my ($cgi, $projid, $repoid, $arch) = @_;
   my $prp = "$projid/$repoid";
@@ -2871,6 +2888,8 @@ sub abortbuild {
 }
 
 #
+# OBSOLETE: qemu shall be installed into the target system
+#           FIXME3.0: remove this
 # if there is a qemu dir in OBS backend install dir workers load qemu from OBS backend server
 # this is similiar to the rest of build script code
 # if that does also not exist, workers copy qemu from worker local installed qemu
@@ -2892,9 +2911,10 @@ sub getcode {
   my @send;
   push @send, getqemuinterpreters() if $dir eq 'build';
   for my $file (grep {!/^\./} ls($dir)) {
-    if ($file eq 'Build' && -d "$dir/$file") {
-      for my $file2 (grep {!/^\./} ls("$dir/Build")) {
-	push @send, {'name' => "$file2", 'filename' => "$dir/Build/$file2"};
+    if (($file eq 'Build' || $file eq 'emulator') && -d "$dir/$file") {
+      push @send, {'name' => $file, 'mode' => 0x41ed, 'data' => ''};
+      for my $file2 (grep {!/^\./} ls("$dir/$file")) {
+	push @send, {'name' => "$file/$file2", 'filename' => "$dir/$file/$file2"};
       }
     }
     next unless -f "$dir/$file";
@@ -3440,6 +3460,7 @@ my $dispatches = [
   '!worker /getbinaryversions $project $repository $arch binaries: nometa:bool?' => \&getbinaryversions,
   '!worker /getjobdata $arch $job $jobid:md5' => \&getjobdata,
   '!worker /getpackagebinaryversionlist $project $repository $arch $package* withcode:bool?' => \&getpackagebinaryversionlist,
+  '!worker /badpackagebinaryversionlist $project $repository $arch $package*' => \&badpackagebinaryversionlist,
   '!worker /getpreinstallimageinfos $prpa+ match:?' => \&getpreinstallimageinfos,
 
   # published files
