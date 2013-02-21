@@ -1,0 +1,10 @@
+[Unit]
+Description=OBS obssrcserver daemon
+After=syslog.target
+
+[Service]
+ExecStart=/usr/libexec/obssrcserver start
+ExecStop=/usr/libexec/obssrcserver stop
+
+[Install]
+WantedBy=multi-user.target

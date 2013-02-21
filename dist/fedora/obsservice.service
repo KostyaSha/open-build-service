@@ -1,0 +1,10 @@
+[Unit]
+Description=OBS service daemon
+After=syslog.target
+
+[Service]
+ExecStart=/usr/libexec/obsservice start
+ExecStop=/usr/libexec/obsservice stop
+
+[Install]
+WantedBy=multi-user.target

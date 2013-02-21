@@ -1,0 +1,9 @@
+[Unit]
+Description=OBS publisher daemon
+After=syslog.target
+
+[Service]
+ExecStart=/usr/libexec/obspublisher start
+
+[Install]
+WantedBy=multi-user.target

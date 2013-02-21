@@ -1235,7 +1235,7 @@ class MaintenanceTests < ActionController::IntegrationTest
     assert_xml_tag :tag => "description"
     assert_xml_tag :tag => "mtime"
     node=nil
-    IO.popen("gunzip -cd #{Rails.root}/tmp/backend_data/repos/BaseDistro2.0:/LinkedUpdateProject/BaseDistro2LinkedUpdateProject_repo/repodata/*-updateinfo.xml.gz") do |io|
+    IO.popen("xzcat #{Rails.root}/tmp/backend_data/repos/BaseDistro2.0:/LinkedUpdateProject/BaseDistro2LinkedUpdateProject_repo/repodata/*-updateinfo.xml.xz") do |io|
        node = REXML::Document.new( io.read )
     end
     assert_equal "My-#{Time.now.year}-1", node.elements["/updates/update/id"].first.to_s

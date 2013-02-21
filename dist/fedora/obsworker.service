@@ -1,0 +1,11 @@
+[Unit]
+Description=OBS worker daemon
+After=syslog.target
+
+[Service]
+ExecStart=/usr/libexec/obsworker start
+ExecStop=/usr/libexec/obsworker stop
+Type=forking
+
+[Install]
+WantedBy=multi-user.target

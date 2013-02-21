@@ -1,0 +1,10 @@
+[Unit]
+Description=OBS storage setup
+After=syslog.target
+
+[Service]
+ExecStart=/usr/libexec/obsstoragesetup start
+Type=forking
+
+[Install]
+WantedBy=multi-user.target

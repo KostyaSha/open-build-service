@@ -1,0 +1,11 @@
+[Unit]
+Description=OBS obsscheduler  daemon
+After=syslog.target
+
+[Service]
+ExecStart=/usr/libexec/obsscheduler start
+ExecStop=/usr/libexec/obsscheduler stop
+Type=forking
+
+[Install]
+WantedBy=multi-user.target

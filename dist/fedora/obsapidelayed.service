@@ -1,0 +1,13 @@
+[Unit]
+Description=OBS apidelayed daemon
+After=syslog.target
+
+[Service]
+ExecStart=/usr/libexec/obsapidelayed start
+ExecStop=/usr/libexec/obsapidelayed stop
+Type=forking
+User=wwwrun
+Group=www
+
+[Install]
+WantedBy=multi-user.target
