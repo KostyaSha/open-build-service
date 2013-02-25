@@ -2037,6 +2037,34 @@ end
     assert_response :success
   end
 
+  def test_invalid_names
+    prepare_request_with_user "Iggy", "asdfasdf"
+
+    req = "<request>
+            <action type='submit'>
+              <source project='kde4' package='kdelibs' />
+              <target project='c++ ' package='TestPack'/>
+            </action>
+            <description/>
+            <state who='Iggy' name='new'/>
+          </request>"
+    post "/request?cmd=create", req
+    assert_response 400
+    assert_xml_tag( :tag => "status", :attributes => { :code => "invalid_record"} )
+
+    req = "<request>
+            <action type='submit'>
+              <source project='kde4' package='kdelibs' />
+              <target project='c++' package='TestPack '/>
+            </action>
+            <description/>
+            <state who='Iggy' name='new'/>
+          </request>"
+    post "/request?cmd=create", req
+    assert_response 400
+    assert_xml_tag( :tag => "status", :attributes => { :code => "invalid_record"} )
+  end
+
   def test_special_chars
     prepare_request_with_user "Iggy", "asdfasdf"
     # create request
@@ -2124,6 +2152,30 @@ end
     prepare_request_with_user "tom", "thunder"
     delete "/source/home:tom:branches:home:Iggy:todo"
     assert_response :success
+  end
+
+  def test_try_to_modify_virtual_package
+    prepare_request_with_user "Iggy", "asdfasdf"
+
+    get "/source/BaseDistro:Update/pack1/_meta"
+    assert_response :success
+    assert_xml_tag( :tag => "package", :attributes => { :project => "BaseDistro"} ) # it appears via project link
+
+    # and create a request to wrong target
+    [ "delete", "set_bugowner", "add_role", "change_devel" ].each do |at|
+      rq = '<request>
+             <action type="'+at+'">'
+      rq += "  <source project='BaseDistro' package='pack1'/>"        if at == "change_devel"
+      rq += '  <target project="BaseDistro:Update" package="pack1"/>'
+      rq += "  <person name='Iggy' role='reviewer' />"                if at == "add_role"
+      rq += '</action>
+             <state name="new" />
+           </request>'
+
+      post "/request?cmd=create", rq
+      assert_response 404
+      assert_xml_tag( :tag => "status", :attributes => { :code => "not_found"} )
+    end
   end
 
   def test_repository_delete_request
