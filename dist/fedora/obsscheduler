@@ -50,33 +50,5 @@ case "$1" in
 				killall bs_sched
 			fi
 		fi
-		#rc_status -v
-	;;
-	restart)
-		$0 stop	
-		$0 start
-		#rc_status
-	;;
-	try-restart)
-		$0 status
-		if test $? = 0; then
-			$0 restart
-		else
-			rc_reset        # Not running is not a failure.
-		fi
-		# Remember status and be quiet
-		#rc_status
-	;;
-	reload)
-	;;
-	status)
-		echo -n "Checking for obsscheduler: "
-                # FIXME: needs proper checking for all invoked schedulers
-		checkproc bs_sched
-		rc_status -v
-	;;
-	*)
-		echo "Usage: $0 {start|stop|status|try-restart|restart|reload}"
-		exit 1
 	;;
 esac

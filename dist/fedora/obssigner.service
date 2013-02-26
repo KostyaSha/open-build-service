@@ -1,0 +1,11 @@
+[Unit]
+Description=OBS obssigner  daemon
+After=syslog.target
+
+[Service]
+ExecStart=/usr/libexec/obssigner start
+ExecStop=/usr/libexec/obssigner stop
+Type=forking
+
+[Install]
+WantedBy=multi-user.target
