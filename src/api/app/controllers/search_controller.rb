@@ -29,6 +29,10 @@ class SearchController < ApplicationController
     search(:issue, true)
   end
 
+  def person
+    search(:person, true)
+  end
+
   def bs_request
     search(:request, true)
   end
@@ -83,8 +87,14 @@ class SearchController < ApplicationController
   end
 
   def search(what, render_all)
+    if render_all and params[:match].blank?
+      render_error :status => 400, :errorcode => "empty_match",
+                   :message => "No predicate fround in match argument"
+      return
+    end
+
     predicate = predicate_from_match_parameter(params[:match])
-    
+
     logger.debug "searching in #{what}s, predicate: '#{predicate}'"
 
     xe = XpathEngine.new
@@ -100,6 +110,8 @@ class SearchController < ApplicationController
         elsif item.kind_of? Repository
           # This returns nil if access is not allowed
           next if ProjectUserRoleRelationship.forbidden_project_ids.include? item.db_project_id
+        elsif item.kind_of? User
+          # Person data is public
         elsif item.kind_of? Issue
           # all our hosted issues are public atm
         elsif item.kind_of? BsRequest

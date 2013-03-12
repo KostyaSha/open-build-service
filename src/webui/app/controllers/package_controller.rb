@@ -29,7 +29,7 @@ class PackageController < ApplicationController
     end
     @bugowners_mail = []
     (@package.bugowners + @project.bugowners).uniq.each do |bugowner|
-        mail = bugowner.email
+        mail = bugowner.email if bugowner
         @bugowners_mail.push(mail.to_s) if mail
     end unless @spider_bot
     @revision = params[:rev]
@@ -262,6 +262,7 @@ class PackageController < ApplicationController
     rescue ActiveXML::Transport::Error => e
       if @expand == 1
         @forced_unexpand = e.summary
+        @forced_unexpand = e.details if e.details
         @expand = 0
         return set_file_details
       end

@@ -382,7 +382,7 @@ sub runservice {
     $error = $@ if $@;
   } else {
     $error ||= 'error';
-    $error = "service daemon error: $error";
+    $error = "service daemon error:\n $error";
   }
   if ($linkfiles) {
     # argh, a link! put service run result in old filelist
@@ -2917,6 +2917,8 @@ sub getproject {
     for my $pp (@{$p->{'link'} || []}) {
       $pp->{'project'} = maptoremote($proj, $pp->{'project'});
     }
+    delete $p->{'person'};
+    delete $p->{'group'};
     $p->{'mountproject'} = $proj->{'root'} if defined $proj->{'root'};
     $proj = $p;
   }
@@ -3195,6 +3197,8 @@ sub getpackage {
     if ($pack->{'devel'} && exists($pack->{'devel'}->{'project'})) {
       $pack->{'devel'}->{'project'} = maptoremote($proj, $pack->{'devel'}->{'project'});
     }
+    delete $pack->{'person'};
+    delete $pack->{'group'};
     return ($pack, $BSXML::pack);
   }
   if ($cgi->{'rev'} || $cgi->{'deleted'}) {

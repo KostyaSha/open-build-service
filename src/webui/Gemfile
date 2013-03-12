@@ -13,6 +13,7 @@ group :assets do
   gem 'jquery-datatables-rails'
   gem 'therubyracer'
   gem 'codemirror-rails', '>= 3.0'
+  gem 'rails_tokeninput'
 end
 
 group :development do

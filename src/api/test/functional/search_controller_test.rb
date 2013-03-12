@@ -87,6 +87,52 @@ class SearchControllerTest < ActionController::IntegrationTest
     assert_select "status[code] > summary", /illegal xpath attribute/
   end
 
+  def test_xpath_search_for_person_or_group
+    # used by maintenance people
+    prepare_request_with_user "Iggy", "asdfasdf"
+    get "/search/project", :match => "(group/@role='bugowner' or person/@role='bugowner') and starts-with(@name,\"Base\"))"
+    assert_response :success
+    get "/search/package", :match => "(group/@role='bugowner' or person/@role='bugowner') and starts-with(@project,\"Base\"))"
+    assert_response :success
+    get "/search/request?match=(action/@type='set_bugowner'+and+state/@name='accepted')"
+    assert_response :success
+
+    # small typo, no equal ...
+    get "/search/request?match(mistake)"
+    assert_response 400
+    assert_xml_tag :tag => 'status', :attributes => { :code => "empty_match" }
+  end
+
+  def test_person_searches
+    # used by maintenance people
+    prepare_request_with_user "Iggy", "asdfasdf"
+    get "/search/person", :match => "(@login='Iggy')"
+    assert_response :success
+    assert_xml_tag :tag => 'collection', :attributes => { :matches => "1" }
+    assert_xml_tag :parent => { :tag => 'person' }, :tag => 'login', :content => "Iggy"
+    assert_xml_tag :parent => { :tag => 'person' }, :tag => 'email', :content => "Iggy@pop.org"
+    assert_xml_tag :parent => { :tag => 'person' }, :tag => 'realname', :content => "Iggy Pop"
+    assert_xml_tag :parent => { :tag => 'person' }, :tag => 'state', :content => "confirmed"
+
+    get "/search/person", :match => "(@login='Iggy' or @login='tom')"
+    assert_response :success
+    assert_xml_tag :tag => 'collection', :attributes => { :matches => "2" }
+
+    get "/search/person", :match => "(@email='Iggy@pop.org')"
+    assert_response :success
+    assert_xml_tag :tag => 'collection', :attributes => { :matches => "1" }
+
+    get "/search/person", :match => "(@realname='Iggy Pop')"
+    assert_response :success
+    assert_xml_tag :tag => 'collection', :attributes => { :matches => "1" }
+
+# FIXME2.5: this will work when we turn to enums for the user state
+#    get "/search/person", :match => "(@state='confirmed')"
+#    assert_response :success
+#    assert_xml_tag :tag => 'collection', :attributes => { :matches => "1" }
+
+  end
+
   def test_xpath_old_osc
     # old osc < 0.137 did use the search interface wrong, but that worked ... :/
     # FIXME3.0: to be removed!
@@ -254,17 +300,17 @@ class SearchControllerTest < ActionController::IntegrationTest
 
   def test_pagination
     prepare_request_with_user "Iggy", "asdfasdf"
-    get "/search/package"
+    get "/search/package?match=*"
     assert_response :success
     assert_xml_tag :tag => 'collection'
     all_packages_count = get_package_count
 
-    get "/search/package", :limit => 3
+    get "/search/package?match=*", :limit => 3
     assert_response :success
     assert_xml_tag :tag => 'collection'
     assert get_package_count == 3
 
-    get "/search/package", :offset => 3
+    get "/search/package?match=*", :offset => 3
     assert_response :success
     assert_xml_tag :tag => 'collection'
     assert get_package_count == (all_packages_count - 3)

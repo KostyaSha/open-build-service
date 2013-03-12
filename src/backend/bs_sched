@@ -2351,16 +2351,13 @@ sub get_projpacks {
     print "getting data for project '$projid' package '".join("', '", @packids)."' from $BSConfig::srcserver\n";
     push @args, "project=$projid";
     for my $packid (@packids) {
-      delete $projpacks->{$projid}->{'package'}->{$packid} if $projpacks->{$projid} && $projpacks->{$projid}->{'package'};
       push @args, "package=$packid";
     }
   } elsif (defined($projid)) {
     print "getting data for project '$projid' from $BSConfig::srcserver\n";
     push @args, "project=$projid";
-    delete $projpacks->{$projid};
   } else {
     print "getting data for all projects from $BSConfig::srcserver\n";
-    $projpacks = {};
   }
   my $projpacksin;
   while (1) {
@@ -2419,10 +2416,22 @@ sub update_projpacks {
   my ($projpacksin, $projid, $packids) = @_;
 
   checkbuildrepoid($projpacksin);
+  # free old data
+  if (!defined($projid)) {
+    $projpacks = {};
+  } elsif (!($packids && @$packids)) {
+    delete $projpacks->{$projid};
+  } elsif ($projpacks->{$projid} && $projpacks->{$projid}->{'package'}) {
+    for my $packid (@$packids) {
+      delete $projpacks->{$projid}->{'package'}->{$packid};
+    }
+  }
   for my $proj (@{$projpacksin->{'project'} || []}) {
     if ($packids && @$packids) {
       die("bad projpack answer\n") unless $proj->{'name'} eq $projid;
       if ($projpacks->{$projid}) {
+	# do not delete the missingpackages flag if we just update single packages
+	$proj->{'missingpackages'} = 1 if $projpacks->{$projid}->{'missingpackages'};
 	# use all packages/configs from old projpacks
 	my $opackage = $projpacks->{$projid}->{'package'} || {};
 	for (keys %$opackage) {
@@ -2541,7 +2550,7 @@ sub update_project_meta {
   }
   eval {
     # withsrcmd5 is needed for the patterns md5sum
-    $projpacksin = xrpc($ctx, $projid, "$BSConfig::srcserver/getprojpack", $BSXML::projpack, "project=$projid", 'nopackages', 'withrepos', 'withconfig', 'withsrcmd5', "arch=$myarch");
+    $projpacksin = xrpc($ctx, $projid, $param, $BSXML::projpack, "project=$projid", 'nopackages', 'withrepos', 'withconfig', 'withsrcmd5', "arch=$myarch");
   };
   if ($@ || !$projpacksin) {
     print $@ if $@;
@@ -2660,7 +2669,7 @@ sub addretryevent {
     if ($ev->{'type'} eq 'repository' || $ev->{'type'} eq 'recheck') {
       next if $ev->{'repository'} ne $oev->{'repository'};
     } elsif ($ev->{'type'} eq 'package') {
-      next if $ev->{'package'} ne $oev->{'package'};
+      next if ($ev->{'package'} || '') ne ($oev->{'package'} || '');
     }
     return;
   }
@@ -2713,15 +2722,15 @@ sub find_linked_sources {
   if ($packids) {
     for my $packid (unify(@$packids)) {
       for my $linfo (grep {$_->{'project'} eq $projid && ($_->{'package'} eq $packid || $_->{'package'} eq ':*')} @projpacks_linked) {
-          push @{$linked{$linfo->{'myproject'}}}, defined($linfo->{'mypackage'}) ? $linfo->{'mypackage'} : $packid;
-        }
-      }
-    } else {
-      for my $linfo (grep {$_->{'project'} eq $projid} @projpacks_linked) {
-        next unless exists $linfo->{'mypackage'};
-        push @{$linked{$linfo->{'myproject'}}}, $linfo->{'mypackage'};
+	push @{$linked{$linfo->{'myproject'}}}, defined($linfo->{'mypackage'}) ? $linfo->{'mypackage'} : $packid;
       }
     }
+  } else {
+    for my $linfo (grep {$_->{'project'} eq $projid} @projpacks_linked) {
+      next unless exists $linfo->{'mypackage'};
+      push @{$linked{$linfo->{'myproject'}}}, $linfo->{'mypackage'};
+    }
+  }
   return \%linked;
 }
 
@@ -6340,7 +6349,7 @@ if (!$testprojid && -s "$rundir/bs_sched.$myarch.state") {
       $projpacks = $schedstate->{'projpacks'};
     } else {
       # get project and package information from src server
-      get_projpacks(undef, undef);
+      get_projpacks(undef, undef);	# XXX: async
     }
     get_projpacks_postprocess();
 
@@ -6404,6 +6413,14 @@ if (!$testprojid && -s "$rundir/bs_sched.$myarch.state") {
       %watchremote_start = %{$schedstate->{'watchremote_start'}};
     }
 
+    # start project data fetch for delayed startup projects
+    for my $projid (sort keys %$projpacks) {
+      my $packs = $projpacks->{$projid}->{'package'} || {};
+      for my $packid (sort keys %$packs) {
+        $delayedfetchprojpacks{$projid} = [ '/all' ] if ($packs->{$packid}->{'error'} || '') eq 'delayed startup';
+      }
+    }
+
     if ($schedstate->{'fetchprojpacks'} && $schedstate->{'projpacks'}) {
       my $ectx = {
 	'fetchprojpacks' => $schedstate->{'fetchprojpacks'},
@@ -6429,8 +6446,12 @@ if (!$projpacks && $asyncmode) {
   update_projpacks($projpacksin);
   get_projpacks_postprocess();
   for my $projid (sort keys %$projpacks) {
-    next unless %{$projpacks->{$projid}->{'package'} || {}};
+    my $packs = $projpacks->{$projid}->{'package'} || {};
+    next unless %$packs;
     $delayedfetchprojpacks{$projid} = [ '/all' ];	# hack
+    for my $packid (sort keys %$packs) {
+      $packs->{$packid}->{'error'} = 'delayed startup';
+    }
   }
   @lookat_low = sort keys %$projpacks;
   push @lookat_low, @prps;
@@ -6719,6 +6740,24 @@ NEXTPRP:
       last;
     }
 
+    # postpone if we got source change RPCs running
+    if (defined($prp)) {
+      my ($projid) = split('/', $prp, 2);
+      if ($iswaiting{$projid}) {
+	my $rhandle = $iswaiting{$projid};
+	push @{$rhandle->{'_wakeup'}}, [ $prp, {'changetype' => $lookattype} ];
+	next;
+      }
+    }
+
+    if (%iswaiting) {
+      print "running async RPC requests:\n";
+      for my $server (sort keys %iswaiting_server) {
+	next unless %{$iswaiting_server{$server} || {}};
+	print "  - $server: ".scalar(keys %{$iswaiting_server{$server}})." running, ".@{$iswaiting_serverload{$server} || []}." waiting\n";
+      }
+    }
+
     if (!defined($prp)) {
       if ($testmode) {
 	print "Test mode, all sources and events processed, exiting...\n";
@@ -6742,15 +6781,6 @@ NEXTPRP:
       next;
     }
 
-    my ($projid, $repoid) = split('/', $prp, 2);
-
-    # postpone if we got source change RPCs running
-    if ($iswaiting{$projid}) {
-      my $rhandle = $iswaiting{$projid};
-      push @{$rhandle->{'_wakeup'}}, [ $prp, {'changetype' => $lookattype} ];
-      next;
-    }
-
     $notmed++;
     $notlow++;
     if ($lookattype eq 'low') {
@@ -6767,6 +6797,7 @@ NEXTPRP:
     print " (".@lookat_high."/".@lookat_med."/".@lookat_low."/".(keys %lookat_next)."/".@prps.")\n";
     delete $nextmed{$prp};
 
+    my ($projid, $repoid) = split('/', $prp, 2);
     next if $testprojid && $projid ne $testprojid;
 
     if (!defined($repoid)) {
@@ -7244,6 +7275,7 @@ NEXTPRP:
 
     # copy old data over if we have missing packages
     if ($projpacks->{$projid}->{'missingpackages'}) {
+      addretryevent({'type' => 'package', 'project' => $projid});
       $oldpackstatus = BSUtil::retrieve("$reporoot/$prp/$myarch/:packstatus", 1) || {};
       $oldpackstatus->{'packstatus'} ||= {};
       $oldpackstatus->{'packerror'} ||= {};
@@ -7307,9 +7339,9 @@ NEXTPRP:
 	  $packerror{$packid} = $pdata->{'error'};
 	  next;
 	}
-	if ($pdata->{'error'} =~ /interconnect error:/) {
+	if ($pdata->{'error'} eq 'delayed startup' || $pdata->{'error'} =~ /interconnect error:/) {
 	  addretryevent({'type' => 'package', 'project' => $projid, 'package' => $packid});
-          $ctx->{'havedelayed'} = 1;
+	  $ctx->{'havedelayed'} = 1;
 	  $packstatus{$packid} = 'blocked';
 	  $packerror{$packid} = $pdata->{'error'};
 	  next;
