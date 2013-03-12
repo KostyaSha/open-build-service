@@ -205,7 +205,7 @@ sub createArchitectures( $ )
 
     foreach my $requiredArch( @{$archSetList} ) {
 	my $ref = $requiredArch->{ref};
-	die ( "ERROR: No such archset $requiredArch\n" ) unless $archSets{$ref} ;
+	die ( "ERROR: No such archset $ref\n" ) unless $archSets{$ref} ;
 	my @archis = @{ $archSets{$ref}->{archList} };
 	my $border = @archis; # the amount of entries
 	
@@ -400,7 +400,7 @@ sub createMetadata( $$$ )
       } else {
         foreach my $requiredArch( @{$archSetList} ) {
           my $ref = $requiredArch->{ref};
-          die( "ERROR: No such archset $requiredArch\n" ) unless $archSets{$ref};
+          die( "ERROR: No such archset $ref\n" ) unless $archSets{$ref};
           push @onlyarch, $archSets{$ref}->{productarch} unless grep { $_ eq $archSets{$ref}->{productarch} } @onlyarch;
         }
         # In 11.4 and later noarch metapackages need explicit a onlyarch="noarch" in config because we do now fail on missing packages
@@ -436,7 +436,7 @@ sub containsMyArch( $$$ )
     foreach my $s( split( /\s*,\s*/, $archList ) ){
       foreach my $requiredArch( @{$archSetList} ) {
 	my $ref = $requiredArch->{ref};
-	die( "ERROR: No such archset $requiredArch\n" ) unless $archSets{$ref};
+	die( "ERROR: No such archset $ref\n" ) unless $archSets{$ref};
         return 1 if ( $s eq $archSets{$ref}->{productarch} );
       }
     }
@@ -572,6 +572,8 @@ sub groupToPackages( $$$$$ )
     foreach my $condList( @{$groupRef->{conditional} } ) {
 #	print "Handling group conditional $condList->{name}\n";
 	my $cond = $conditionals{ $condList->{name} };
+
+        die( "ERROR: Unknown condition is used: $condList->{name}\n" ) unless $cond;
 
 	if( $cond->{platform} ) {
 	    my @platforms = @{$cond->{platform}};
@@ -783,7 +785,7 @@ sub createFlavorReadme( $$ ){
       my $readmedir = "\$RPM_BUILD_ROOT/%{_defaultdocdir}/$product->{name}-release-$flavor->{flavor}";
       $reame_file .= "mkdir -p $readmedir\n";
       $reame_file .= "cat >$readmedir/README << EOF\n";
-      $reame_file .= "This package just exist just for providing the product flavor \'$flavor->{flavor}\'.\n";
+      $reame_file .= "This package only exists for providing the product flavor \'$flavor->{flavor}\'.\n";
       $reame_file .= "\nEOF\n\n";
     }
     return $reame_file;
@@ -879,11 +881,16 @@ sub writeProductSPECfile( $$$$ )
     $productprovides.="Provides:       %name-%version\n";
     $productprovides.="Provides:       $prodRef->{'project'}->{'name'}\n" if ((defined($prodRef->{'project'}->{'name'})) && ("$prodRef->{'project'}->{'name'}" ne ""));
     $productprovides.="Provides:       product()\n";
-    if ((not defined $medium->{'mediastyle'}) || $medium->{'mediastyle'} eq "suse-11.1" || $medium->{'mediastyle'} eq "suse-11.2" || $medium->{'mediastyle'} eq "suse-11.3") {
+# We keep using the old way using since today since otherwise specified. That makes the product release defintion
+# as specified practically effectless. Anyway better to keep this then all the different workarounds.
+#    if ((not defined $medium->{'mediastyle'}) || $medium->{'mediastyle'} eq "suse-11.1" || $medium->{'mediastyle'} eq "suse-11.2" || $medium->{'mediastyle'} eq "suse-11.3") {
       $productprovides.="Provides:       product($product->{'name'}) = %version-%release\n";
-    } else {
-      $productprovides.="Provides:       product($product->{'name'}) = $product->{version}-$product->{release}\n";
-    }
+# This is the official specified way:
+#    } else {
+#      my $release = $product->{release};
+#      $release ||= "0";
+#      $productprovides.="Provides:       product($product->{'name'}) = $product->{version}-$release\n";
+#    }
     if (defined($product->{'patchlevel'}) && $product->{'patchlevel'} ne '0') {
       $productprovides.="Provides:       product($product->{'name'}-SP$product->{'patchlevel'}) = %version-%release\n";
       $productprovides.="Obsoletes:      ".$product->{name}."-SP".$product->{'patchlevel'}."-migration\n";  # release package name
@@ -1314,7 +1321,10 @@ foreach my $medium ( @$media ){
           my $kiwi = Storable::dclone(\%generalImage);
 	  if (defined($medium->{'mediastyle'}) && $medium->{'mediastyle'} ne "suse-11.1" && $medium->{'mediastyle'} ne "suse-11.2") {
 	      $kiwi->{schemaversion} = "4.1"; # new kiwi requires exact this version
-	      $kiwi->{preferences}->{type} = [{image => "product"}];
+	      my $attrs = {image => "product"};
+	      $attrs->{'firmware'} = $medium->{'firmware'} if $medium->{'firmware'};
+	      $attrs->{'hybrid'} = 'true' if (defined($medium->{'run_hybridiso'})) && $medium->{'run_hybridiso'} eq "true";
+	      $kiwi->{preferences}->{type} = [$attrs];
 	  }else{
 	      # the schemE vs. schemA is intended by kiwi!
 	      $kiwi->{schemeversion} = "2.4"; # before openSUSE 11.3, until kiwi 3.74

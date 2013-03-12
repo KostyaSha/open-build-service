@@ -6,7 +6,6 @@ class PersonControllerTest < ActionController::IntegrationTest
   fixtures :all
 
   def test_index
-    reset_auth
     get "/person/"
     assert_response 401
 
@@ -47,7 +46,6 @@ class PersonControllerTest < ActionController::IntegrationTest
   end
 
   def test_userinfo_with_empty_auth_header
-    reset_auth
     get "/person/tom"
     assert_response 401
   end
@@ -81,13 +79,15 @@ class PersonControllerTest < ActionController::IntegrationTest
     assert_response :success
     
     # change the xml data set that came as response body
-    new_name = "Freddy Cool"
+    new_name = "Thommy Cool"
     userinfo_xml = @response.body
     doc = REXML::Document.new( userinfo_xml )
     doc.elements["//realname"].text = new_name
     doc.elements["//watchlist"].add_element "project"
     doc.elements["//project"].add_attribute REXML::Attribute.new('name', 'home:tom')
-    
+    r = REXML::Element.new("globalrole")
+    r.text = "Admin"
+    doc.elements["/person"].insert_after(doc.elements["//state"], r)
     # Write changed data back and validate result
     prepare_request_valid_user
     put "/person/tom", doc.to_s
@@ -96,6 +96,23 @@ class PersonControllerTest < ActionController::IntegrationTest
     assert_response :success
     assert_xml_tag :tag => "realname", :content => new_name
     assert_xml_tag :tag => "project", :attributes => { :name => "home:tom" }
+    assert_xml_tag :tag => "state", :content => "confirmed"
+    assert_no_xml_tag :tag => "globalrole", :content => "Admin" # written as non-Admin
+
+    # write as admin
+    prepare_request_with_user "king", "sunflower"
+    put "/person/tom", doc.to_s
+    assert_response :success
+    get "/person/tom"
+    assert_response :success
+    assert_xml_tag :tag => "globalrole", :content => "Admin" # written as non-Admin
+    #revert
+    doc.elements["/person"].delete_element "globalrole"
+    put "/person/tom", doc.to_s
+    assert_response :success
+    get "/person/tom"
+    assert_response :success
+    assert_no_xml_tag :tag => "globalrole", :content => "Admin"
 
     # remove watchlist item
     doc.elements["//watchlist"].delete_element "project"
@@ -112,6 +129,23 @@ class PersonControllerTest < ActionController::IntegrationTest
     prepare_request_with_user "king", "sunflower"
     put "/person/tom", doc.to_s
     assert_response :success
+
+    # lock user
+    doc.elements["//state"].text = "locked"
+    put "/person/tom", doc.to_s
+    assert_response :success
+    get "/person/tom"
+    assert_response :success
+    assert_xml_tag :tag => "state", :content => "locked"
+    prepare_request_valid_user
+    put "/person/tom", doc.to_s
+    assert_response 403
+    # set back
+    prepare_request_with_user "king", "sunflower"
+    doc.elements["//state"].text = "confirmed"
+    put "/person/tom", doc.to_s
+    assert_response :success
+
     # create new user
     put "/person/new_user", doc.to_s
     assert_response :success
@@ -133,7 +167,6 @@ class PersonControllerTest < ActionController::IntegrationTest
   end
 
   def test_register_and_change_password_new_way
-    reset_auth
     data = '<unregisteredperson>
               <login>adrianSuSE</login>
               <email>adrian@suse.de</email>
@@ -182,7 +215,6 @@ class PersonControllerTest < ActionController::IntegrationTest
   end
 
   def test_register_old_way
-    reset_auth
     data = '<unregisteredperson>
               <login>adrianSuSE</login>
               <email>adrian@suse.de</email>

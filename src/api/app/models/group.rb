@@ -14,7 +14,7 @@ class Group < ActiveRecord::Base
   has_many :package_group_role_relationships, :foreign_key => 'bs_group_id'
 
   validates_format_of  :title,
-                       :with => %r{\A[\w\-]*\z},
+                       :with => %r{\A[\w\.\-]*\z},
                        :message => 'must not contain invalid characters.'
   validates_length_of  :title,
                        :in => 2..100, :allow_nil => true,
@@ -92,13 +92,14 @@ class Group < ActiveRecord::Base
     if persons
       persons.elements('person') do |person|
         next unless person['userid']
-        if cache.has_key? person['userid']
+        user = User.get_by_login(person['userid'])
+        if cache.has_key? user.id
           #user has already a role in this package
-          cache[User.find_by_login(person['userid']).id] = :keep
+          cache[user.id] = :keep
         else
-          user = User.get_by_login(person['userid'])
           gu = GroupsUser.create( user: user, group: self)
           gu.save!
+          cache[user.id] = :keep
         end
       end
     end
@@ -129,6 +130,7 @@ class Group < ActiveRecord::Base
   end
 
   def add_user(user)
+    return if self.users.find_by_id user.id # avoid double creation
     gu = GroupsUser.create( user: user, group: self)
     gu.save!
   end

@@ -165,8 +165,8 @@ OBSApi::Application.routes.draw do
       match 'statistics/latest_updated' => :latest_updated
       match 'statistics/global_counters' => :global_counters
       match 'statistics/latest_built' => :latest_built
-      match 'statistics/get_limit' => :get_limit
 
+      match 'statistics/active_request_creators/:project' => :active_request_creators
     end
 
     ### /status_message
@@ -208,6 +208,7 @@ OBSApi::Application.routes.draw do
       match 'search/package_id' => :package_id #FIXME3.0: to be removed
       match 'search/project' => :project
       match 'search/package' => :package
+      match 'search/person' => :person
       match 'search/attribute' => :attribute
       match 'search/owner' => :owner
       match 'search/missing_owner' => :missing_owner
@@ -266,7 +267,11 @@ OBSApi::Application.routes.draw do
 
     ### /distributions
 
-    match 'distributions' => 'distribution#index'
+    match '/distributions' => 'distributions#upload', via: :put
+    # as long as the distribution IDs are integers, there is no clash
+    match '/distributions/include_remotes' => 'distributions#include_remotes', via: :get
+    # update is missing here
+    resources :distributions, only: [:index, :show, :create, :destroy]
 
     ### /public
     
@@ -288,8 +293,15 @@ OBSApi::Application.routes.draw do
       match 'public/binary_packages/:project/:package' => :binary_packages, :constraints => cons
     end
 
+    match 'public/configuration' => 'configurations#show'
+    match 'public/configuration.json' => 'configurations#show'
+    match 'public/configuration.xml' => 'configurations#show'
     match 'public/status/:action' => 'status#index'
 
+    #
+    # NOTE: webui routes are NOT stable and change together with the webui.
+    #       DO NOT USE THEM IN YOUR TOOLS!
+    #
     controller :webui do
       match 'webui/project_infos' => :project_infos
       match 'webui/project_requests' => :project_requests
@@ -302,6 +314,7 @@ OBSApi::Application.routes.draw do
       match 'webui/request_list' => :request_list
       match 'webui/change_role' => :change_role, via: :post
       match 'webui/all_projects' => :all_projects
+      match 'webui/owner' => :owner
     end
 
     match "/404" => "main#notfound"

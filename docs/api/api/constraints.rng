@@ -17,13 +17,29 @@
 
   <define ns="" name="constraint-element">
     <interleave> 
-      <optional>
+      <zeroOrMore>
         <element ns="" name="hostlabel">
+          <optional>
+            <attribute name="exclude">
+              <choice>
+                <value>false</value>
+                <value>true</value>
+              </choice>
+            </attribute>
+          </optional>
           <text/>
         </element>
-      </optional>
+      </zeroOrMore>
       <optional>
         <element name="sandbox">
+          <optional>
+            <attribute name="exclude">
+              <choice>
+                <value>false</value>
+                <value>true</value>
+              </choice>
+            </attribute>
+          </optional>
           <ref name="build-sandbox"/>
         </element>
       </optional>
@@ -74,6 +90,11 @@
             </optional>
             <optional>
              <element name="memory">
+               <ref name="size-unit"/>
+             </element>
+            </optional>
+            <optional>
+             <element name="physicalmemory">
                <ref name="size-unit"/>
              </element>
             </optional>

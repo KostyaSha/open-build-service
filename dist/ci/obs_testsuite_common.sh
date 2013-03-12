@@ -35,15 +35,10 @@ setup_api() {
   echo "Setup additional configuration"
   cp config/options.yml.example config/options.yml
 
-  echo "Install missing gems locally"
-  mv Gemfile.lock Gemfile.lock.orig
-  bundle list
-  diff -u Gemfile.lock.orig Gemfile.lock || :
-
   chmod a+x script/start_test_backend
 
   echo "Initialize test database, load seed data"
-  rake db:drop db:create db:setup --trace
+  bundle exec rake db:drop db:create db:setup --trace
   cd ../..
 }
 
@@ -57,15 +52,10 @@ setup_webui() {
   echo "Setup additional configuration"
   cp config/options.yml.example config/options.yml
 
-  echo "Install missing gems locally"
-  mv Gemfile.lock Gemfile.lock.orig
-  bundle list
-  diff -u Gemfile.lock.orig Gemfile.lock || :
-
   chmod +x script/start_test_api 
 
   echo "Initialize test database, load seed data"
-  rake db:drop db:create db:setup --trace
+  bundle exec rake db:drop db:create db:setup --trace
 
   cd ../..
   cd docs/api

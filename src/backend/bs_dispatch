@@ -96,13 +96,11 @@ sub getcodemd5 {
   my %new;
   my $doclean;
   my @files = grep {!/^\./} ls($dir);
-  my @bfiles = grep {!/^\./} ls("$dir/Build");
-  my %bfiles = map {$_ => 1} @bfiles;
-  @files = sort(@files, @bfiles);
+  push @files, map {"Build/$_"} grep {!/^\./} ls("$dir/Build");
+  push @files, map {"emulator/$_"} grep {!/^\./} ls("$dir/emulator");
   $cache ||= {};
-  for my $file (@files) {
-    my $f = $bfiles{$file} ? "$dir/Build/$file" : "$dir/$file";
-    next unless -f $f;
+  for my $file (sort @files) {
+    next unless -f "$dir/$file";
     my @s = stat _;
     my $id = "$s[9]/$s[7]/$s[1]";
     $new{$id} = 1; 
@@ -110,7 +108,7 @@ sub getcodemd5 {
       $md5 .= "$cache->{$id}  $file\n";
       next;
     }    
-    $cache->{$id} = Digest::MD5::md5_hex(readstr($f));
+    $cache->{$id} = Digest::MD5::md5_hex(readstr("$dir/$file"));
     $md5 .= "$cache->{$id}  $file\n";
     $doclean = 1; 
   }
@@ -395,20 +393,32 @@ my %secure_sandboxes;
 if ($BSConfig::secure_sandboxes) {
   %secure_sandboxes = map {$_ => 1} @$BSConfig::secure_sandboxes;
 } else {
-  $secure_sandboxes{$_} = 1 for qw{xen kvm};
+  # we just define xen, kvm and zvm as entirely secure sandboxes atm
+  # chroot, emulator, lxc are currently considered as not safe
+  $secure_sandboxes{$_} = 1 for qw{xen kvm zvm};
 }
 
 sub oracle {
   my ($job, $worker, $constraints) = @_;
+  for my $l (@{$constraints->{'hostlabel'} || []}) {
+    if ($l->{'exclude'} eq 'true') {
+      return 0 if grep {$_ eq $l->{'_content'}} @{$worker->{'hostlabel'} || []};
+    } else {
+      return 0 unless grep {$_ eq $l->{'_content'}} @{$worker->{'hostlabel'} || []};
+    }
+  }
   if ($constraints->{'hostlabel'}) {
     return 0 unless grep {$_ eq $constraints->{'hostlabel'}} @{$worker->{'hostlabel'} || []};
   }
-  if ($constraints->{'sandbox'}) {
-    if ($constraints->{'sandbox'} eq 'secure') {
-      # we just define xen and kvm as entirely secure sandboxes atm
-      return 0 unless $secure_sandboxes{$worker->{'sandbox'} || ''};
+  if ($constraints->{'sandbox'} && $constraints->{'sandbox'}->{'content'}) {
+    if ($constraints->{'sandbox'}->{'exclude'} && $constraints->{'sandbox'}->{'exclude'} eq 'true') {
+      return 0 if $constraints->{'sandbox'}->{'content'} eq ($worker->{'sandbox'} || '');
     } else {
-      return 0 unless $constraints->{'sandbox'} eq ($worker->{'sandbox'} || '');
+      if ($constraints->{'sandbox'}->{'content'} eq 'secure') {
+        return 0 unless $secure_sandboxes{$worker->{'sandbox'} || ''};
+      } else {
+        return 0 unless $constraints->{'sandbox'}->{'content'} eq ($worker->{'sandbox'} || '');
+      }
     }
   }
   if ($constraints->{'linux'}) {
@@ -424,7 +434,10 @@ sub oracle {
     return 0 unless $worker->{'hardware'};
     return 0 if $constraints->{'hardware'}->{'processors'} && $constraints->{'hardware'}->{'processors'} > ($worker->{'hardware'}->{'processors'} || 0);
     return 0 if $constraints->{'hardware'}->{'disk'} && getmbsize($constraints->{'hardware'}->{'disk'}) > ($worker->{'hardware'}->{'disk'} || 0);
-    return 0 if $constraints->{'hardware'}->{'memory'} && getmbsize($constraints->{'hardware'}->{'memory'}) > ($worker->{'hardware'}->{'memory'} || 0);
+    my $memory = ($worker->{'hardware'}->{'memory'} || 0);
+    my $swap = ($worker->{'hardware'}->{'swap'} || 0);
+    return 0 if $constraints->{'hardware'}->{'memory'} && getmbsize($constraints->{'hardware'}->{'memory'}) > ( $memory + $swap );
+    return 0 if $constraints->{'hardware'}->{'physicalmemory'} && getmbsize($constraints->{'hardware'}->{'physicalmemory'}) > $memory;
     if ($constraints->{'hardware'}->{'cpu'}) {
       return 0 unless $worker->{'hardware'}->{'cpu'};
       my %workerflags = map {$_ => 1} @{$worker->{'hardware'}->{'cpu'}->{'flag'} || []};
@@ -848,6 +861,9 @@ while (1) {
 	  }
 	  $workerinfo{$idle} = $worker;
 	  $workerinfo_mtime{$idle} = $s[7];
+	}
+	if ($BSConfig::dispatch_constraint) {
+	  next if !$BSConfig::dispatch_constraint->($ic->{$job}, $workerinfo{$idle});
 	}
 	if ($constraints) {
 	  my $ora = oracle($ic->{$job}, $workerinfo{$idle}, $constraints);

@@ -64,11 +64,14 @@ my $vm_swap = '';
 my $vm_kernel;
 my $vm_initrd;
 my $vm_memory;
+my $vm_worker_name;
+my $vm_worker_instance;
 my $vmdisk_rootsize;
 my $vmdisk_swapsize;
 my $vmdisk_filesystem;
 my $vmdisk_mount_options;
 my $vmdisk_clean;
+my $emulator_script;
 my $hugetlbfs;
 my $workerid;
 my $srcserver;
@@ -145,12 +148,17 @@ sub tail_logfile {
 
 sub cleanup_job {
   if ($vm_tmpfs_mode) {
-    qsystem("umount", $buildroot) && die("umount tmpfs failed: $!\n");
+    qsystem("umount", "-l", $buildroot) && die("umount tmpfs failed: $!\n");
   }
 }
 
 sub kill_job {
-  if (system("$statedir/build/build", "--root", $buildroot, ($vm ? ($vm, "$vm_root") : ()), "--kill")) {
+  # In z/VM, just kill the worker with name $vm_worker_name
+  if ($vm eq "zvm") {
+    if (system("$statedir/build/build", "--vm-worker", $vm_worker_name, "--kill")) {
+      return 0;
+    }
+  } elsif (system("$statedir/build/build", "--root", $buildroot, ($vm ? ($vm, "$vm_root") : ()), "--kill")) {
     return 0;
   }
   cleanup_job();
@@ -183,7 +191,11 @@ Usage: $0 [OPTION] --root <directory> --statedir <directory>
 
        --lxc       : enable lxc
 
-       --tmpfs     : uses tmpfs (memory) for for the build root
+       --emulator  : enable emulator (requires prepared emulator.sh script)
+       
+       --zvm       : enable z/VM
+
+       --tmpfs     : uses tmpfs (memory) for the build root
 
        --device    : set kvm or xen root device (default is <root>/root file)
 
@@ -197,6 +209,12 @@ Usage: $0 [OPTION] --root <directory> --statedir <directory>
 
        --vm-memory : set amount of memory to use (xen/kvm)
 
+       --vm-worker NAME
+                   : (z/VM) set name of the actual worker
+
+       --vm-worker-nr NUMBER
+                   : (z/VM) set instance number of the actual worker
+
        --vmdisk-rootsize <size>
                    : size of the root disk image (default 4096M)
 
@@ -205,6 +223,9 @@ Usage: $0 [OPTION] --root <directory> --statedir <directory>
 
        --vmdisk-filesystem <none|ext3|ext4>
                    : filesystem to use for autosetup root disk image
+
+       --emulator-script <script>
+                   : Define the emulator script 
 
        --hugetlbfs HUGETLBFSPATH
                    : Use hugetlb for memory management, path to mounted hugetlbfs.
@@ -328,6 +349,16 @@ while (@ARGV) {
     shift @ARGV;
     next;
   }
+  if ($ARGV[0] eq '--emulator') {
+    $vm = ' --emulator';
+    shift @ARGV;
+    next;
+  }
+  if ($ARGV[0] eq '--zvm') {
+    $vm = ' --zvm';
+    shift @ARGV;
+    next;
+  }
   if ($ARGV[0] eq '--tmpfs') {
     shift @ARGV;
     $vm_tmpfs_mode = 1;
@@ -358,6 +389,16 @@ while (@ARGV) {
     $vm_memory = shift @ARGV;
     next;
   }
+  if ($ARGV[0] eq '--vm-worker') {
+    shift @ARGV;
+    $vm_worker_name = shift @ARGV;
+    next;
+  }
+  if ($ARGV[0] eq '--vm-worker-nr') {
+    shift @ARGV;
+    $vm_worker_instance = shift @ARGV;
+    next;
+  }
   if ($ARGV[0] eq '--vmdisk-rootsize') {
     shift @ARGV;
     $vmdisk_rootsize = shift @ARGV;
@@ -381,6 +422,11 @@ while (@ARGV) {
   if ($ARGV[0] eq '--vmdisk-clean') {
     shift @ARGV;
     $vmdisk_clean = 1;
+    next;
+  }
+  if ($ARGV[0] eq '--emulator-script') {
+    shift @ARGV;
+    $emulator_script = shift @ARGV;
     next;
   }
   if ($ARGV[0] eq '--hugetlbfs') {
@@ -518,6 +564,24 @@ if ($justbuild) {
 }
 
 # collect environment information for the dispatcher. To be checked with job constraints
+sub device_size($) {
+  my ($device) = @_;
+  if ($device) {
+    if (-b $device) {
+      if (open(SIZE, '-|', '/sbin/blockdev', '--getsize64', $device)) {
+        my $line = <SIZE>;
+        chomp $line;
+        my $size = $line / ( 1024 * 1024 );
+        close SIZE;
+        return $size;
+      }
+    } else {
+      # implement me for loop device files
+    }
+  }
+  return undef;
+}
+
 my $workerenvstate = {};
 {
   # host labels
@@ -528,7 +592,9 @@ my $workerenvstate = {};
   $workerenvstate->{'sandbox'} = 'chroot';
   $workerenvstate->{'sandbox'} = 'xen' if $vm eq ' --xen';
   $workerenvstate->{'sandbox'} = 'kvm' if $vm eq ' --kvm';
+  $workerenvstate->{'sandbox'} = 'emulator' if $vm eq ' --emulator';
   $workerenvstate->{'sandbox'} = 'lxc' if $vm eq 'lxc';
+  $workerenvstate->{'sandbox'} = 'zvm' if $vm eq ' --zvm';
   # build host owner
   $workerenvstate->{'owner'} = $owner if $owner;
   # linux kernel
@@ -560,16 +626,12 @@ my $workerenvstate = {};
   $hw->{'swap'} = $vmdisk_swapsize if $vmdisk_swapsize;
   $hw->{'disk'} = $vmdisk_rootsize if $vmdisk_rootsize;
   if ($vm_root) {
-    if (-b $vm_root) {
-      if (open(SIZE, '-|', '/sbin/blockdev', '--getsize64', $vm_root)) {
-        my $size = <SIZE>;
-        chomp $size;
-        $hw->{'disk'} = $size / ( 1024 * 1024 );
-        close SIZE;
-      }
-    } else {
-      # implement me for loop device files
-    }
+    my $size = device_size($vm_root);
+    $hw->{'disk'} = $size if $size;
+  }
+  if ($vm_swap) {
+    my $size = device_size($vm_swap);
+    $hw->{'swap'} = $size if $size;
   }
   $workerenvstate->{'hardware'} = $hw;
 };
@@ -638,10 +700,13 @@ sub send_state {
 
 sub codemd5 {
   my ($dir) = @_;
-  my @files = ls($dir);
+  my @files = grep {!/^\./} ls($dir);
+  my @bfiles = map {"Build/$_"} grep {!/^\./} ls("$dir/Build");
+  my @efiles = map {"emulator/$_"} grep {!/^\./} ls("$dir/emulator");
+  @files = sort(@files, @bfiles, @efiles);
   my $md5 = '';
-  for my $file (sort @files) {
-    next if -l "$dir/$file" || -d "$dir/$file";
+  for my $file (@files) {
+    next if -l "$dir/$file" || -d _;
     $md5 .= Digest::MD5::md5_hex(readstr("$dir/$file"))."  $file\n";
   }
   $md5 = Digest::MD5::md5_hex($md5);
@@ -668,14 +733,8 @@ sub getcode {
   my $odir = "$dir.old";
 
   # clean up stale runs
-  if (-e $ndir) {
-    unlink("$ndir/$_") for ls($ndir);
-    rmdir($ndir) || die("rmdir $ndir: $!\n");
-  }
-  if (-e $odir) {
-    unlink("$odir/$_") for ls($odir);
-    rmdir($odir) || die("rmdir $odir: $!\n");
-  }
+  rm_rf($ndir) if -e $ndir;
+  rm_rf($odir) if -e $odir;
 
   mkdir($ndir) || die("mkdir $ndir: $!\n");
   my $res = BSRPC::rpc({
@@ -683,6 +742,7 @@ sub getcode {
     'directory' => $ndir,
     'timeout' => $gettimeout,
     'withmd5' => 1,
+    'createsubdirs' => 1,
     'receiver' => \&BSHTTP::cpio_receiver,
   });
   die("getcode error\n") unless $res;
@@ -693,10 +753,9 @@ sub getcode {
     chmod(0755, "$ndir/bs_worker");
     die("bs_worker selftest failed\n") if system("cd $ndir && ./bs_worker --selftest");
   } elsif ($dir eq 'build') {
-    symlink('.', "$ndir/Build") || die("symlink: $!\n");
     symlink('.', "$ndir/Date") || die("symlink: $!\n");
     symlink('.', "$ndir/Time") || die("symlink: $!\n");
-    # we just change everyfile to be on the safe side
+    # we just change every file to be on the safe side
     chmod(0755, "$ndir/$_->{'name'}") for @$res;
   }
 
@@ -711,7 +770,7 @@ sub getcode {
   }
   my $md5 = '';
   for my $file (sort {$a->{'name'} cmp $b->{'name'}} @$res) {
-    $md5 .= "$file->{'md5'}  $file->{'name'}\n";
+    $md5 .= "$file->{'md5'}  $file->{'name'}\n" if $file->{'md5'};
   }
   $md5 = Digest::MD5::md5_hex($md5);
   return $md5;
@@ -802,6 +861,33 @@ sub getdeltasources {
   }, undef, "job=$buildinfo->{'job'}", "arch=$buildinfo->{'arch'}", "jobid=$buildinfo->{'jobid'}");
   die("Error\n") unless ref($res) eq 'ARRAY';
   return @meta;
+}
+
+sub getfollowupsources {
+  my ($buildinfo, $dir) = @_;
+  my $server = $buildinfo->{'reposerver'};
+  my $res = BSRPC::rpc({
+    'uri' => "$server/getjobdata",
+    'directory' => $dir,
+    'timeout' => $gettimeout,
+    'receiver' => \&BSHTTP::cpio_receiver,
+  }, undef, "job=$buildinfo->{'job'}", "arch=$buildinfo->{'arch'}", "jobid=$buildinfo->{'jobid'}");
+  die("Error\n") unless ref($res) eq 'ARRAY';
+  die("no old sources in followup job\n") unless @$res;
+}
+
+sub getsslcert {
+  my ($buildinfo, $dir) = @_;
+  my $server = $buildinfo->{'srcserver'} || $srcserver;
+  my $cert;
+  eval {
+    $cert = BSRPC::rpc({
+      'uri' => "$server/getsslcert",
+      'timeout' => $gettimeout,
+    }, undef, "project=$buildinfo->{'project'}", "autoextend=1");
+  };
+  die("could not retrieve ssl certificate: $@\n") if $@;
+  writestr("$dir/_projectcert.crt", undef, $cert) if $cert;
 }
 
 sub qsystem {
@@ -1286,6 +1372,16 @@ sub getbinaries_kiwiproduct {
         for (@good) {
 	  unlink("$ddir/$_.new.rpm");
 	  delete $cachenew{"$ddir/$_"};
+	}
+	if ($bvl && $server ne $buildinfo->{'srcserver'}) {
+	  # the bvl entry seems to be wrong. tell our server about that.
+	  eval {
+	    BSRPC::rpc({
+	      'uri' => "$server/badpackagebinaryversionlist",
+	      'timeout' => $gettimeout,
+	    }, undef, "project=$projid", "repository=$repoid", "arch=$arch", "package=$packid");
+	  };
+	  warn($@) if $@;
 	}
 	$res = BSRPC::rpc({
 	  'uri' => "$server/build/$projid/$repoid/$arch/$packid",
@@ -1870,6 +1966,7 @@ sub dobuild {
   $kiwimode = 1 if $buildinfo->{'file'} =~ /\.kiwi$/;
   my $deltamode;
   $deltamode = 1 if $buildinfo->{'file'} eq '_delta';
+  my $followupmode = $buildinfo->{'followupfile'};
 
   my $helper = '';
   /^\Q$helperarch\E:(.*)$/ && ($helper = $1) for @{$BSCando::cando{$hostarch}};
@@ -1911,23 +2008,34 @@ sub dobuild {
     my $spec = readstr("$statedir/worker/worker-deltagen.spec", 1) || readstr("worker-deltagen.spec");
     writestr("$srcdir/worker-deltagen.spec", undef, $spec);
     $buildinfo->{'file'} = 'worker-deltagen.spec';
+  } elsif ($followupmode) {
+    getfollowupsources($buildinfo, $srcdir);
+    print "packages, ";
+    getbinaries($buildinfo, $pkgdir, $srcdir, $preinstallimagedata);
+    undef $oldpkgdir;
+    $buildinfo->{'file'} = $followupmode;
+    @meta = split("\n", readstr("$srcdir/meta"));
   } else {
+    my $needsslcert;
     push @meta, getsources($buildinfo, $srcdir);
     importbuild() unless defined &Build::queryhdrmd5;
-    if (!$kiwimode && $Build::Features::preinstallimage && -s "$srcdir/$buildinfo->{'file'}") {
-      # check if we may use a preinstallimage
+    if (!$kiwimode && -s "$srcdir/$buildinfo->{'file'}") {
+      # check for build markers
       local *F;
-      my $needbins;
       if (open(F, '<', "$srcdir/$buildinfo->{'file'}")) {
 	while(<F>) {
 	  chomp;
-	  next unless /^#\s*needsbinariesforbuild\s*$/s;
-	  undef $preinstallimagedata;	# can't use an image, sorry
-	  last;
+	  if (/^#\s*needsbinariesforbuild\s*$/s && $Build::Features::preinstallimage) {
+	    undef $preinstallimagedata;	# can't use an image, sorry
+	  }
+	  if (/^#\s*needssslcertforbuild\s*$/s) {
+	    $needsslcert = 1;
+	  }
 	}
 	close F;
       }
     }
+    getsslcert($buildinfo, $srcdir) if $needsslcert;
     print "packages, ";
     push @meta, getbinaries($buildinfo, $pkgdir, $srcdir, $preinstallimagedata);
   }
@@ -1992,7 +2100,7 @@ sub dobuild {
   }
 
   push @args, "$statedir/build/build";
-  if ($vm =~ /(xen|kvm)/) {
+  if ($vm =~ /(xen|kvm|zvm)/) {
     mkdir("$buildroot/.mount") unless -d "$buildroot/.mount";
     push @args, '--root', "$buildroot/.mount";
     push @args, $vm, "$vm_root";
@@ -2009,6 +2117,14 @@ sub dobuild {
     push @args, '--vmdisk-mount-options', "\"$vmdisk_mount_options\"" if $vmdisk_mount_options;
     push @args, '--vmdisk-clean'if $vmdisk_clean;
     push @args, '--hugetlbfs', $hugetlbfs if $hugetlbfs;
+    push @args, '--vm-worker', $vm_worker_name if $vm_worker_name;
+    push @args, '--vm-worker-nr', $vm_worker_instance if $vm_worker_instance;
+    push @args, '--statistics';
+  } elsif ($vm =~ /emulator/) {
+    push @args, '--root', "$buildroot/.mount";
+    push @args, '--vm-type', 'emulator';
+    push @args, '--statistics';
+    push @args, '--emulator-script', $emulator_script if $emulator_script;
   } elsif ($vm =~ /lxc/) {
     push @args, '--root', $buildroot;
     push @args, '--vm-type', $vm;
@@ -2031,7 +2147,7 @@ sub dobuild {
   push @args, '--reason', "Building $packid for project '$projid' repository '$repoid' arch '$arch' srcmd5 '$buildinfo->{'srcmd5'}'";
   push @args, '--disturl', $disturl;
   push @args, '--linksources' if $localkiwi;
-  push @args, '--signdummy' if $kiwimode && (!$localkiwi || ! -e "$localkiwi/localkiwi.rpm") && $buildinfo->{'imagetype'} && $buildinfo->{'imagetype'}->[0] eq 'product' && -e "$statedir/build/signdummy";
+  push @args, '--signdummy' if $kiwimode && $buildinfo->{'imagetype'} && $buildinfo->{'imagetype'}->[0] eq 'product' && -e "$statedir/build/signdummy";
   push @args, "$srcdir/$buildinfo->{'file'}";
   qsystem(@args);
 
@@ -2058,56 +2174,54 @@ sub dobuild {
     return 1;
   }
 
-  if ($vm =~ /(xen|kvm)/) {
+  if ($vm =~ /(xen|kvm|zvm|emulator)/) {
     rm_rf("$buildroot/.build.packages");
-    if (! -d "$buildroot/.mount/.build.packages") {
-      # old style, call extractbuild
-      print "extracting built packages...\n";
-      @args = ();
-      push @args, "$statedir/build/extractbuild";
-      push @args, '--root', "$vm_root";
-      push @args, '--swap', "$vm_swap";
-      if (system(@args)) {
-        die("extractbuild failed\n");
-      }
-      mkdir_p("$buildroot/.build.packages");
-      if (system("cd $buildroot/.build.packages && cpio --extract --no-absolute-filenames -v < $vm_swap")) {
-	die("cpio extract failed\n");
-      }
-    } else {
-      # new style, build already did extractbuild for us
-      if(!rename("$buildroot/.mount/.build.packages", "$buildroot/.build.packages")) {
-        print "final rename failed: $!";
-        return 1;
-      }
+    # move directory with extracted build results
+    if(!rename("$buildroot/.mount/.build.packages", "$buildroot/.build.packages")) {
+      print "final rename failed: $!";
+      return 1;
     }
     # XXX: extracted cpio is flat but code below expects those directories...
     symlink('.', "$buildroot/.build.packages/SRPMS");
     symlink('.', "$buildroot/.build.packages/DEBS");
     symlink('.', "$buildroot/.build.packages/KIWI");
     # convert build statistics into xml
-    if( -e "$buildroot/.build.packages/_statistics") {
+    if( -e "$buildroot/.build.packages/OTHER/_statistics") {
       my $stats = {};
       my $iosectors = 0;
       my $iorequests = 0;
-      open(FILE, "<", "$buildroot/.build.packages/_statistics") || die;
+      open(FILE, "<", "$buildroot/.build.packages/OTHER/_statistics") || die;
       while(<FILE>) {
         chomp;
         my ($key, $value) = split( ": ", $_ );
         if ($key eq "MAX_mb_used_on_disk" ){
-          $stats->{'disk'}->{'max_usage'} = $value;
+          $stats->{'disk'}->{'usage'}->{'size'}->{'unit'} = "M";
+          $stats->{'disk'}->{'usage'}->{'size'}->{'_content'} = $value;
         } elsif ($key eq "MAX_mb_used_memory" ){
-          $stats->{'memory'}->{'max_usage'} = $value;
+          $stats->{'memory'}->{'usage'}->{'size'}->{'unit'} = "M";
+          $stats->{'memory'}->{'usage'}->{'size'}->{'_content'} = $value;
         } elsif ($key eq "IO_requests_read" || $key eq "IO_requests_write" ){
           $iorequests += $value;
-          $stats->{'disk'}->{'io_requests'} = $iorequests;
+          $stats->{'disk'}->{'usage'}->{'io_requests'} = $iorequests;
         } elsif ($key eq "IO_sectors_read" || $key eq "IO_sectors_write" ){
           $iosectors += $value;
-          $stats->{'disk'}->{'io_sectors'} = $iosectors;
+          $stats->{'disk'}->{'usage'}->{'io_sectors'} = $iosectors;
+        } elsif ($key eq "TIME_total" ){
+          $stats->{'times'}->{'total'}->{'time'}->{'unit'} = "s";
+          $stats->{'times'}->{'total'}->{'time'}->{'_content'} = $value;
+        } elsif ($key eq "TIME_preinstall" ){
+          $stats->{'times'}->{'preinstall'}->{'time'}->{'unit'} = "s";
+          $stats->{'times'}->{'preinstall'}->{'time'}->{'_content'} = $value;
+        } elsif ($key eq "TIME_install" ){
+          $stats->{'times'}->{'install'}->{'time'}->{'unit'} = "s";
+          $stats->{'times'}->{'install'}->{'time'}->{'_content'} = $value;
+        } elsif ($key eq "TIME_main_build" ){
+          $stats->{'times'}->{'main'}->{'time'}->{'unit'} = "s";
+          $stats->{'times'}->{'main'}->{'time'}->{'_content'} = $value;
         }
       }
       close FILE;
-      writexml("$buildroot/.build.packages/_statistics.new", "$buildroot/.build.packages/_statistics", $stats, $BSXML::buildstatistics);
+      writexml("$buildroot/.build.packages/OTHER/_statistics.new", "$buildroot/.build.packages/OTHER/_statistics", $stats, $BSXML::buildstatistics);
     }
   }
 
@@ -2497,6 +2611,34 @@ if ($@) {
   }
   print "$@";
   $ex = 1;
+}
+if ($buildinfo->{'followupfile'}) {
+  my $buildsrcdir = "$buildroot/.build.packages/SOURCES";
+  $buildsrcdir = "$buildroot/.build-srcdir" if $vm =~ /(xen|kvm)/;
+  # if it was a follow up build, prepend old logfile
+  if (-s "$buildsrcdir/logfile") {
+    local *F;
+    local *T;
+    if (open(F, '<', "$buildroot/.build.log")) {
+      if (open(T, '>>', "$buildsrcdir/logfile")) {
+	my $buf;
+	syswrite(T, $buf) while sysread(F, $buf, 8192);
+	close T;
+	rename("$buildsrcdir/logfile", "$buildroot/.build.log");
+      }
+      close F;
+    }
+  }
+  if (-d "$buildroot/.build.packages/OTHER") {
+    for my $f ('rpmlint.log', '_statistics') {
+      next unless -s "$buildsrcdir/$f";
+      BSUtil::cp("$buildsrcdir/$f", "$buildroot/.build.packages/OTHER/$f");
+    }
+  }
+  # delete follow-up srcrpm
+  for my $srcrpm (ls("$buildroot/.build.packages/SRPMS")) {
+    unlink("$buildroot/.build.packages/SRPMS/$srcrpm") unless -e "$buildsrcdir/$srcrpm";
+  }
 }
 
 # build is done, send back result

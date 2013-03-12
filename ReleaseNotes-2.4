@@ -28,12 +28,20 @@ Temporary Problems:
    routes have to be enhanced and webui needs to get support 
    for using it.
 
+Regressions:
+============
+
+ * LDAP support is not tested and in unknown state (not part of test suite)
+   (A rewrite of it is WIP)
+
+ * source service editor in webui is not available anymore
+
 Changes on purpose:
 ===================
 
  * Migration to Ruby 1.9 and Rails 3.2
 
- * request database got move from backend to the api. Directly
+ * request database got moved from backend to the api. Directly
    after update all requests seem to have vanished, but a delayed
    job is importing them again. This can take some hours dependening
    on the amount of requests.
@@ -44,14 +52,6 @@ Changes on purpose:
  * Requests do require a description now in any case
 
  * webui configurations got moved from environments/*.rb to config/options.yml.
-   TODO: import config settings on update
-
- * Build Prerequires can be used also with the FileProvides feature in the
-   build configuration now.
-
- * Regular users can copy entire projects (without binary results) now.
-
- * Upload of binaries via api is allowed to administrators now.
 
  * Package conflicts and obsoletes are taken into account when resolving 
    dependencies for build jobs. This improves build consistency but may also lead
@@ -59,6 +59,18 @@ Changes on purpose:
    can be restored by adding the following line into the project configuration:
 
    ExpandFlags: ignoreconflicts
+
+ * cross architecture build directives in project configuration
+   CBInstall and CBPreinstall are not supported anymore. Use standard "Install" and
+   "Preinstall" directives instead.
+   => all architectures can be used as host for cross build now.
+
+ * The api file/distribution.xml is obsolete, the config gets stored in the SQL database
+   now. Existing file gets imported during migration.
+   The list from remote instances can displayed and updated automatically now.
+
+ * The api has no html pages anymore. The user and group management went into the 
+   standard webui configuration module.
 
 Features
 ========
@@ -82,6 +94,13 @@ Features
    in the published repositories can be configured now. This can be done via
    the "staticlinks" keyword in Repotype: definition.
 
+ * Build Prerequires can be used also with the FileProvides feature in the
+   build configuration now.
+
+ * Regular users can copy entire projects (without binary results) now.
+
+ * Upload of binaries via api is allowed to administrators now.
+
  * Data about used resources of build jobs get collected. However it
    gets not yet used for build job assignment
 
@@ -104,13 +123,48 @@ Features
 
  * aarch64 architecture added (aka armv8 or arm64)
 
+ * New generic "emulator" virtualization support. Can be used to build inside
+   of system emulators (for foreign hardware for example)
+
+ * New s390 z/VM virtualization support.
+
+ * Asynchronus mode for handling interconnects is available. This will avoid
+   scheduler hangups with slow or broken network to a remote instance.
+   Enable this via
+
 Deprecated:
 ===========
 
 The following calls have been marked as deprecated, they will get removed in OBS 3.0
 
-* api
-  - /person/$LOGIN/group   -> use /group?login=$LOGIN   instead
-  - /search/project_id     -> use /search/project/id    instead
-  - /search/package_id     -> use /search/package/id    instead
+ * api
+   - /person/$LOGIN/group   -> use /group?login=$LOGIN   instead
+   - /search/project_id     -> use /search/project/id    instead
+   - /search/package_id     -> use /search/package/id    instead
+
+ * The deprecated support to copy qemu binaries from external build host into
+   build environment has been removed. This includes also the CBInstall and CBPreinstall
+   project configuration directives. 
+
+Notes for systems using systemd:
+================================
+
+OBS is using init scripts, not systemd style .service files. This will stay until
+we will switch from SLES 11 to SLES 12 as default production platform.
+
+openSUSE installations may use systemd (instead of sysvinit) and it should work
+in general. Not working are usages like
+
+ # rcobssrcserver status
+
+You will only get the systemd status here.
+
+Also stopping services may not kill all processes, which leads to abstract errors
+when trying to restart them. We heard also about trashed MySQL databases when using
+systemd.
+
+To avoid these problems you need switch directory to avoid the systemd mapper:
+
+ # cd /etc/init.d
+ # ./obssrcserver status|stop|start
 

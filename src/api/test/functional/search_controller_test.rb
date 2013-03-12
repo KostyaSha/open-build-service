@@ -10,7 +10,6 @@ class SearchControllerTest < ActionController::IntegrationTest
   end
 
   def test_search_unknown
-    reset_auth
     get "/search/attribute?namespace=OBS&name=FailedCommend"
     assert_response 401
 
@@ -21,7 +20,6 @@ class SearchControllerTest < ActionController::IntegrationTest
   end
 
   def test_search_one_maintained_package
-    reset_auth
     get "/search/attribute?namespace=OBS&name=Maintained"
     assert_response 401
 
@@ -87,6 +85,52 @@ class SearchControllerTest < ActionController::IntegrationTest
     get "/search/package", :match => '[attribute/@name="Maintained"]'
     assert_response 400
     assert_select "status[code] > summary", /illegal xpath attribute/
+  end
+
+  def test_xpath_search_for_person_or_group
+    # used by maintenance people
+    prepare_request_with_user "Iggy", "asdfasdf"
+    get "/search/project", :match => "(group/@role='bugowner' or person/@role='bugowner') and starts-with(@name,\"Base\"))"
+    assert_response :success
+    get "/search/package", :match => "(group/@role='bugowner' or person/@role='bugowner') and starts-with(@project,\"Base\"))"
+    assert_response :success
+    get "/search/request?match=(action/@type='set_bugowner'+and+state/@name='accepted')"
+    assert_response :success
+
+    # small typo, no equal ...
+    get "/search/request?match(mistake)"
+    assert_response 400
+    assert_xml_tag :tag => 'status', :attributes => { :code => "empty_match" }
+  end
+
+  def test_person_searches
+    # used by maintenance people
+    prepare_request_with_user "Iggy", "asdfasdf"
+    get "/search/person", :match => "(@login='Iggy')"
+    assert_response :success
+    assert_xml_tag :tag => 'collection', :attributes => { :matches => "1" }
+    assert_xml_tag :parent => { :tag => 'person' }, :tag => 'login', :content => "Iggy"
+    assert_xml_tag :parent => { :tag => 'person' }, :tag => 'email', :content => "Iggy@pop.org"
+    assert_xml_tag :parent => { :tag => 'person' }, :tag => 'realname', :content => "Iggy Pop"
+    assert_xml_tag :parent => { :tag => 'person' }, :tag => 'state', :content => "confirmed"
+
+    get "/search/person", :match => "(@login='Iggy' or @login='tom')"
+    assert_response :success
+    assert_xml_tag :tag => 'collection', :attributes => { :matches => "2" }
+
+    get "/search/person", :match => "(@email='Iggy@pop.org')"
+    assert_response :success
+    assert_xml_tag :tag => 'collection', :attributes => { :matches => "1" }
+
+    get "/search/person", :match => "(@realname='Iggy Pop')"
+    assert_response :success
+    assert_xml_tag :tag => 'collection', :attributes => { :matches => "1" }
+
+# FIXME2.5: this will work when we turn to enums for the user state
+#    get "/search/person", :match => "(@state='confirmed')"
+#    assert_response :success
+#    assert_xml_tag :tag => 'collection', :attributes => { :matches => "1" }
+
   end
 
   def test_xpath_old_osc
@@ -223,15 +267,15 @@ class SearchControllerTest < ActionController::IntegrationTest
 
   def test_search_request
     prepare_request_with_user "Iggy", "asdfasdf"
-    get "/search/request", match: "(action/target/@package='pack2' and action/target/@project='BaseDistro2.0' and action/source/@project='BaseDistro2.0' and action/source/@package='pack2_linked' and action/@type='submit')"
+    get "/search/request", match: "(action/target/@package='pack2' and action/target/@project='BaseDistro2.0' and action/source/@project='BaseDistro2.0' and action/source/@package='pack2.linked' and action/@type='submit')"
     assert_response :success
 
     # what osc may do
-    get "search/request", match: "(state/@name='new' or state/@name='review') and (action/target/@project='BaseDistro2.0' or submit/target/@project='BaseDistro2.0' or action/source/@project='BaseDistro2.0' or submit/source/@project='BaseDistro2.0') and (action/target/@package='pack2_linked' or submit/target/@package='pack2_linked' or action/source/@package='pack2_linked' or submit/source/@package='pack2_linked')"
+    get "search/request", match: "(state/@name='new' or state/@name='review') and (action/target/@project='BaseDistro2.0' or submit/target/@project='BaseDistro2.0' or action/source/@project='BaseDistro2.0' or submit/source/@project='BaseDistro2.0') and (action/target/@package='pack2.linked' or submit/target/@package='pack2_linked' or action/source/@package='pack2_linked' or submit/source/@package='pack2_linked')"
     assert_response :success
 
     # what osc really is doing
-    get "search/request", match: "(state/@name='new' or state/@name='review') and (target/@project='BaseDistro2.0' or source/@project='BaseDistro2.0') and (target/@package='pack2_linked' or source/@package='pack2_linked')"
+    get "search/request", match: "(state/@name='new' or state/@name='review') and (target/@project='BaseDistro2.0' or source/@project='BaseDistro2.0') and (target/@package='pack2.linked' or source/@package='pack2_linked')"
     assert_response :success
 
     # maintenance team is doing this query
@@ -256,17 +300,17 @@ class SearchControllerTest < ActionController::IntegrationTest
 
   def test_pagination
     prepare_request_with_user "Iggy", "asdfasdf"
-    get "/search/package"
+    get "/search/package?match=*"
     assert_response :success
     assert_xml_tag :tag => 'collection'
     all_packages_count = get_package_count
 
-    get "/search/package", :limit => 3
+    get "/search/package?match=*", :limit => 3
     assert_response :success
     assert_xml_tag :tag => 'collection'
     assert get_package_count == 3
 
-    get "/search/package", :offset => 3
+    get "/search/package?match=*", :offset => 3
     assert_response :success
     assert_xml_tag :tag => 'collection'
     assert get_package_count == (all_packages_count - 3)
@@ -408,6 +452,13 @@ class SearchControllerTest < ActionController::IntegrationTest
     assert_xml_tag :tag => 'owner', :attributes => { :project => "TEMPORARY", :package => "pack" }
     assert_no_xml_tag :tag => 'owner', :attributes => { :project => "home:coolo:test" }
     assert_xml_tag :tag => 'group', :attributes => { :name => "test_group", :role => "bugowner" }
+
+    get "/search/owner?project=TEMPORARY&binary=package&filter=reviewer&webui_mode=true"
+    assert_response :success
+    assert_xml_tag :tag => 'owner', :attributes => { :rootproject => "TEMPORARY", :project => "TEMPORARY", :package => "pack" },
+                   :children => { :count => 0 }
+    assert_xml_tag :tag => 'owner', :attributes => { :rootproject => "TEMPORARY", :project => "home:Iggy", :package => "TestPack" },
+                   :children => { :count => 0 }
 
     # deepest package definition
     get "/search/owner?project=TEMPORARY&binary=package&limit=-1"

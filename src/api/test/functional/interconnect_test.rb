@@ -6,7 +6,6 @@ class InterConnectTests < ActionController::IntegrationTest
   fixtures :all
    
   def test_anonymous_access
-    reset_auth 
     get "/public/lastevents" # OBS 2.1
     assert_response :success
     assert_xml_tag :tag => "events", :attributes => {:sync => "lost"}
@@ -156,7 +155,7 @@ class InterConnectTests < ActionController::IntegrationTest
     get "/source/RemoteInstance:BaseDistro2.0:LinkedUpdateProject?expand=1"
     assert_response :success
     assert_xml_tag( :tag => "entry", :attributes => { :name => "pack2", :originproject => "RemoteInstance:BaseDistro2.0" } )
-    assert_xml_tag( :tag => "entry", :attributes => { :name => "pack2_linked", :originproject => "RemoteInstance:BaseDistro2.0" } )
+    assert_xml_tag( :tag => "entry", :attributes => { :name => "pack2.linked", :originproject => "RemoteInstance:BaseDistro2.0" } )
     # test binary operations
     prepare_request_with_user "king", "sunflower"
     post "/build/RemoteInstance:BaseDistro", :cmd => "wipe", :package => "pack1"
@@ -215,31 +214,38 @@ class InterConnectTests < ActionController::IntegrationTest
     assert_response 404
     assert_match(/no pubkey available/, @response.body)
 
-    # access to local project with project link to remote
-    get "/source/UseRemoteInstance"
-    assert_response :success
-    get "/source/UseRemoteInstance/_meta"
-    assert_response :success
-    get "/source/UseRemoteInstance/pack1"
-    assert_response :success
-    get "/source/UseRemoteInstance/pack1/_meta"
-    assert_response :success
-    get "/source/UseRemoteInstance/pack1/my_file"
-    assert_response :success
-    post "/source/UseRemoteInstance/pack1", :cmd => "showlinked"
-    assert_response :success
-    post "/source/UseRemoteInstance/pack1", :cmd => "branch"
-    assert_response :success
-    get "/source/UseRemoteInstance"
-    assert_response :success
-    assert_xml_tag( :tag => "directory", :attributes => { :count => "0" } )
+    # access to local project with project link to remote, and via a local indirection
+    [ "UseRemoteInstance", "UseRemoteInstanceIndirect" ].each do |project|
+      get "/source/#{project}"
+      assert_response :success
+      get "/source/#{project}/_meta"
+      assert_response :success
+      get "/source/#{project}/pack1"
+      assert_response :success
+      get "/source/#{project}/pack1/_meta"
+      assert_response :success
+      get "/source/#{project}/pack1/my_file"
+      assert_response :success
+      post "/source/#{project}/pack1", :cmd => "showlinked"
+      assert_response :success
+      post "/source/#{project}/pack1", :cmd => "branch"
+      assert_response :success
+      get "/source/#{project}"
+      assert_response :success
+      assert_xml_tag( :tag => "directory", :attributes => { :count => "0" } )
+      get "/source/#{project}?expand=1"
+      assert_response :success
 if $ENABLE_BROKEN_TEST
-#FIXME2.4: backend does not support expand=1 yet
-    get "/source/UseRemoteInstance?expand=1"
-    assert_response :success
-    assert_xml_tag( :tag => "directory", :attributes => { :count => "1" } )
-    assert_xml_tag( :tag => "entry", :attributes => { :name => "pack1", :originproject => "BaseDistro2.0" } )
+#FIXME2.4: remote packages get not added yet.
+      assert_xml_tag( :tag => "directory", :attributes => { :count => "1" } )
+      assert_xml_tag( :tag => "entry", :attributes => { :name => "pack1", :originproject => "BaseDistro2.0" } )
 end
+    end
+
+    # check access to binaries of remote instance
+    get "/build/UseRemoteInstance/pop/i586/pack1/_log"
+    assert_response 400
+    assert_match(/remote error: pack1  no logfile/, @response.body) # we had no build, but request reached backend
     # test source modifications
     post "/build/UseRemoteInstance/pack1", :cmd => "set_flag"
     assert_response 403
@@ -367,6 +373,19 @@ end
     assert_response :success
   end
 
+# FIXME: backend does not support project copy from remote
+# def test_copy_project
+#   prepare_request_with_user "tom", "thunder"
+#   get "/source/RemoteInstance:BaseDistro"
+#   assert_response :success
+#   post "/source/home:tom:TEMPORARY?cmd=copy&oproject=RemoteInstance:BaseDistro&nodelay=1"
+#   assert_response :success
+#   get "/source/home:tom:TEMPORARY"
+#   assert_response :success
+#   delete "/source/home:tom:TEMPORARY"
+#   assert_response :success
+# end
+
   def test_get_packagelist_with_hidden_remoteurlproject
     prepare_request_with_user "tom", "thunder"
     get "/source/HiddenRemoteInstance"
@@ -430,6 +449,25 @@ end
     #cleanup
     delete "/source/home:tom:remote"
     assert_response :success
+  end
+
+  def test_check_meta_stripping
+    prepare_request_with_user "Iggy", "asdfasdf"
+    # package meta
+    get "/source/home:Iggy/TestPack/_meta"
+    assert_response :success
+    assert_xml_tag :tag => 'person'
+    get "/source/RemoteInstance:home:Iggy/TestPack/_meta"
+    assert_response :success
+    assert_no_xml_tag :tag => 'person'
+
+    # project meta
+    get "/source/home:Iggy/_meta"
+    assert_response :success
+    assert_xml_tag :tag => 'person'
+    get "/source/RemoteInstance:home:Iggy/_meta"
+    assert_response :success
+    assert_no_xml_tag :tag => 'person'
   end
 
   def test_remove_broken_link

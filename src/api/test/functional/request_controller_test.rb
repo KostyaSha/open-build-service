@@ -33,6 +33,12 @@ class RequestControllerTest < ActionController::IntegrationTest
     assert_response 401
   end
 
+  def test_create_invalid
+    prepare_request_with_user "king", "sunflower"
+    post "/request?cmd=create", "GRFZL"
+    assert_response 400
+  end
+
   def test_submit_request_of_new_package
     prepare_request_with_user "Iggy", "asdfasdf"
     post "/source/home:Iggy/NEW_PACKAGE", :cmd => :branch
@@ -75,7 +81,7 @@ class RequestControllerTest < ActionController::IntegrationTest
     post "/request/#{id}?cmd=changestate&newstate=new&comment=oops"
     assert_response :success
     Timecop.freeze(1)
-    post "/request/#{id}?cmd=changestate&newstate=accepted"
+    post "/request/#{id}?cmd=changestate&newstate=accepted&comment=approved"
     assert_response :success
 
     # package got created
@@ -105,7 +111,7 @@ class RequestControllerTest < ActionController::IntegrationTest
           "options"=>{"sourceupdate"=>"cleanup"}, 
           "acceptinfo"=>{"rev"=>"1", "srcmd5"=>"1ded65e42c0f04bd08075dfd1fd08105", "osrcmd5"=>"d41d8cd98f00b204e9800998ecf8427e"}
         }, 
-        "state"=>{"name"=>"accepted", "who"=>"Iggy", "when"=>"2010-07-12T00:00:03", "comment"=>"DESCRIPTION IS HERE"}, 
+        "state"=>{"name"=>"accepted", "who"=>"Iggy", "when"=>"2010-07-12T00:00:03", "comment"=>"approved"}, 
         "history"=>[
                     {"name"=>"new", "who"=>"Iggy", "when"=>"2010-07-12T00:00:00"}, 
                     {"name"=>"declined", "who"=>"Iggy", "when"=>"2010-07-12T00:00:01", "comment"=>'notgood'}, 
@@ -254,6 +260,14 @@ class RequestControllerTest < ActionController::IntegrationTest
     assert_response 404
     assert_xml_tag( :tag => "status", :attributes => { :code => 'unknown_package' } )
 
+    post "/request?cmd=create", load_backend_file('request/set_bugowner_fail_unknown_user')
+    assert_response 404
+    assert_xml_tag( :tag => "status", :attributes => { :code => 'not_found' } )
+
+    post "/request?cmd=create", load_backend_file('request/set_bugowner_fail_unknown_group')
+    assert_response 404
+    assert_xml_tag( :tag => "status", :attributes => { :code => 'not_found' } )
+
     # test direct put
     prepare_request_with_user "Iggy", "asdfasdf"
     put "/request/#{id}", load_backend_file('request/set_bugowner')
@@ -266,7 +280,6 @@ class RequestControllerTest < ActionController::IntegrationTest
 
   # FIXME: we need a way to test this with api anonymous config and without
   def test_create_request_anonymous
-    reset_auth
     post "/request?cmd=create", load_backend_file('request/add_role')
     assert_response 401
   end
@@ -374,7 +387,6 @@ class RequestControllerTest < ActionController::IntegrationTest
   end
 
   def test_create_request_and_supersede
-    reset_auth
     req = load_backend_file('request/works')
 
     prepare_request_with_user "Iggy", "asdfasdf"
@@ -459,8 +471,6 @@ class RequestControllerTest < ActionController::IntegrationTest
 
   # MeeGo BOSS: is using multiple reviews by same user for each step
   def test_create_request_and_multiple_reviews
-    reset_auth
-
     # the birthday of J.K.
     Timecop.freeze(2010, 7, 12)
 
@@ -624,7 +634,6 @@ class RequestControllerTest < ActionController::IntegrationTest
   end
   
   def test_change_review_state_after_leaving_review_phase
-    reset_auth
     req = load_backend_file('request/works')
 
     prepare_request_with_user "Iggy", "asdfasdf"
@@ -861,25 +870,51 @@ end
     assert_match(/Go Away/, @response.body)
     assert_xml_tag :tag => "status", :attributes => { :code => "request_rejected" }
 
+    # just for submit actions
+    post "/source/home:Iggy/_attribute", "<attributes><attribute namespace='OBS' name='RejectRequests'> <value>No Submits</value> <value>submit</value> </attribute> </attributes>"
+    assert_response :success
+    post "/request?cmd=create", rq
+    assert_response 403
+    assert_match(/No Submits/, @response.body)
+    assert_xml_tag :tag => "status", :attributes => { :code => "request_rejected" }
+    # but it works when blocking only for others
+    post "/source/home:Iggy/_attribute", "<attributes><attribute namespace='OBS' name='RejectRequests'> <value>Submits welcome</value> <value>delete</value> <value>set_bugowner</value> </attribute> </attributes>"
+    assert_response :success
+    post "/request?cmd=create", rq
+    assert_response :success
+
+
     # block request creation in package
     post "/source/home:Iggy/TestPack/_attribute", "<attributes><attribute namespace='OBS' name='RejectRequests'> <value>Package blocked</value> </attribute> </attributes>"
     assert_response :success
 
     post "/request?cmd=create", rq
     assert_response 403
-    assert_match(/Go Away/, @response.body)
+    assert_match(/Package blocked/, @response.body)
     assert_xml_tag :tag => "status", :attributes => { :code => "request_rejected" }
-
-#FIXME: test with request without target
-
     # remove project attribute lock
     delete "/source/home:Iggy/_attribute/OBS:RejectRequests"
     assert_response :success
-
+    # still not working
     post "/request?cmd=create", rq
     assert_response 403
     assert_match(/Package blocked/, @response.body)
     assert_xml_tag :tag => "status", :attributes => { :code => "request_rejected" }
+
+    # just for submit actions
+    post "/source/home:Iggy/TestPack/_attribute", "<attributes><attribute namespace='OBS' name='RejectRequests'> <value>No Submits</value> <value>submit</value> </attribute> </attributes>"
+    assert_response :success
+    post "/request?cmd=create", rq
+    assert_response 403
+    assert_match(/No Submits/, @response.body)
+    assert_xml_tag :tag => "status", :attributes => { :code => "request_rejected" }
+    # but it works when blocking only for others
+    post "/source/home:Iggy/TestPack/_attribute", "<attributes><attribute namespace='OBS' name='RejectRequests'> <value>Submits welcome</value> <value>delete</value> <value>set_bugowner</value> </attribute> </attributes>"
+    assert_response :success
+    post "/request?cmd=create", rq
+    assert_response :success
+
+#FIXME: test with request without target
 
     #cleanup
     delete "/source/home:Iggy/TestPack/_attribute/OBS:RejectRequests"
@@ -1063,7 +1098,6 @@ end
   end
 
   def test_create_and_revoke_submit_request_permissions
-    reset_auth
     req = "<request>
              <action type='submit'>
                <source project='home:Iggy' package='TestPack' rev='1' />
@@ -2003,6 +2037,34 @@ end
     assert_response :success
   end
 
+  def test_invalid_names
+    prepare_request_with_user "Iggy", "asdfasdf"
+
+    req = "<request>
+            <action type='submit'>
+              <source project='kde4' package='kdelibs' />
+              <target project='c++ ' package='TestPack'/>
+            </action>
+            <description/>
+            <state who='Iggy' name='new'/>
+          </request>"
+    post "/request?cmd=create", req
+    assert_response 400
+    assert_xml_tag( :tag => "status", :attributes => { :code => "invalid_record"} )
+
+    req = "<request>
+            <action type='submit'>
+              <source project='kde4' package='kdelibs' />
+              <target project='c++' package='TestPack '/>
+            </action>
+            <description/>
+            <state who='Iggy' name='new'/>
+          </request>"
+    post "/request?cmd=create", req
+    assert_response 400
+    assert_xml_tag( :tag => "status", :attributes => { :code => "invalid_record"} )
+  end
+
   def test_special_chars
     prepare_request_with_user "Iggy", "asdfasdf"
     # create request
@@ -2092,6 +2154,30 @@ end
     assert_response :success
   end
 
+  def test_try_to_modify_virtual_package
+    prepare_request_with_user "Iggy", "asdfasdf"
+
+    get "/source/BaseDistro:Update/pack1/_meta"
+    assert_response :success
+    assert_xml_tag( :tag => "package", :attributes => { :project => "BaseDistro"} ) # it appears via project link
+
+    # and create a request to wrong target
+    [ "delete", "set_bugowner", "add_role", "change_devel" ].each do |at|
+      rq = '<request>
+             <action type="'+at+'">'
+      rq += "  <source project='BaseDistro' package='pack1'/>"        if at == "change_devel"
+      rq += '  <target project="BaseDistro:Update" package="pack1"/>'
+      rq += "  <person name='Iggy' role='reviewer' />"                if at == "add_role"
+      rq += '</action>
+             <state name="new" />
+           </request>'
+
+      post "/request?cmd=create", rq
+      assert_response 404
+      assert_xml_tag( :tag => "status", :attributes => { :code => "not_found"} )
+    end
+  end
+
   def test_repository_delete_request
     prepare_request_with_user "Iggy", "asdfasdf"
     meta="<project name='home:Iggy:todo'><title></title><description/><repository name='base'>
@@ -2129,6 +2215,11 @@ end
     node = ActiveXML::Node.new(@response.body)
     assert node.has_attribute?(:id)
     iddelete = node.value('id')
+    post "/request?cmd=create", rq
+    assert_response :success
+    node = ActiveXML::Node.new(@response.body)
+    assert node.has_attribute?(:id)
+    iddelete2 = node.value('id')
     
     prepare_request_with_user "Iggy", "asdfasdf"
     post "/request/#{iddelete}?cmd=changestate&newstate=accepted"
@@ -2142,6 +2233,12 @@ end
     assert_response :success
     assert_xml_tag :parent => { :tag => 'repository', :attributes => { :name => "base" } },
                    :tag => 'path', :attributes => { :project => "deleted", :repository => "deleted" }
+
+    # try again and fail
+    prepare_request_with_user "Iggy", "asdfasdf"
+    post "/request/#{iddelete2}?cmd=changestate&newstate=accepted"
+    assert_response 400
+    assert_xml_tag( :tag => "status", :attributes => { :code => 'repository_missing' } )
 
     # cleanup
     delete "/source/home:Iggy:todo"

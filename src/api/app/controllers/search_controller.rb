@@ -1,4 +1,6 @@
 
+include SearchHelper
+
 class SearchController < ApplicationController
 
   require 'xpath_engine'
@@ -27,6 +29,10 @@ class SearchController < ApplicationController
     search(:issue, true)
   end
 
+  def person
+    search(:person, true)
+  end
+
   def bs_request
     search(:request, true)
   end
@@ -46,7 +52,7 @@ class SearchController < ApplicationController
   def missing_owner
     params[:limit] ||= "0" #unlimited by default
 
-    @owners = _owner(params, nil)
+    @owners = search_owner(params, nil)
 
   end
 
@@ -65,70 +71,7 @@ class SearchController < ApplicationController
       return
     end
 
-
-    @owners = _owner(params, obj)
-  end
-
-  private
-
-  def _owner(params, obj)
-    params[:attribute] ||= "OBS:OwnerRootProject"
-    at = AttribType.find_by_name(params[:attribute])
-    unless at
-      render_error :status => 404, :errorcode => "unknown_attribute_type",
-                   :message => "Attribute Type #{params[:attribute]} does not exist"
-      return
-    end
-
-    limit  = params[:limit] || 1
-
-    projects = []
-    if params[:project]
-      # default project specified
-      projects = [Project.get_by_name(params[:project])]
-    else
-      # Find all marked projects
-      projects = Project.find_by_attribute_type(at)
-      unless projects.length > 0
-        render_error :status => 400, :errorcode => "attribute_not_set",
-                     :message => "The attribute type #{params[:attribute]} is not set on any projects. No default projects defined."
-        return
-      end
-    end
-
-    # search in each marked project
-    owners = []
-    projects.each do |project|
-
-      attrib = project.attribs.where(attrib_type_id: at.id).first
-      filter = ["maintainer","bugowner"]
-      devel  = true
-      if params[:filter]
-        filter=params[:filter].split(",")
-      else
-        if attrib and v=attrib.values.where(value: "BugownerOnly").first
-          filter=["bugowner"]
-        end
-      end
-      if params[:devel]
-        devel=false if [ "0", "false" ].include? params[:devel]
-      else
-        if attrib and v=attrib.values.where(value: "DisableDevel").first
-          devel=false
-        end
-      end
-
-      if obj.nil?
-        owners = project.find_containers_without_definition(devel, filter)
-      elsif obj.class == String
-        owners = project.find_assignees(obj, limit.to_i, devel, filter)
-      else
-        owners = project.find_containers(obj, limit.to_i, devel, filter)
-      end
-
-    end
-
-    return owners
+    @owners = search_owner(params, obj)
   end
 
   def predicate_from_match_parameter(p)
@@ -144,8 +87,14 @@ class SearchController < ApplicationController
   end
 
   def search(what, render_all)
+    if render_all and params[:match].blank?
+      render_error :status => 400, :errorcode => "empty_match",
+                   :message => "No predicate fround in match argument"
+      return
+    end
+
     predicate = predicate_from_match_parameter(params[:match])
-    
+
     logger.debug "searching in #{what}s, predicate: '#{predicate}'"
 
     xe = XpathEngine.new
@@ -161,6 +110,8 @@ class SearchController < ApplicationController
         elsif item.kind_of? Repository
           # This returns nil if access is not allowed
           next if ProjectUserRoleRelationship.forbidden_project_ids.include? item.db_project_id
+        elsif item.kind_of? User
+          # Person data is public
         elsif item.kind_of? Issue
           # all our hosted issues are public atm
         elsif item.kind_of? BsRequest

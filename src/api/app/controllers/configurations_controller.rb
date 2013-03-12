@@ -13,6 +13,8 @@ class ConfigurationsController < ApplicationController
   # GET /configuration.json
   # GET /configuration.xml
   def show
+    valid_http_methods :get
+
     @configuration = ::Configuration.select("title, description").first
 
     respond_to do |format|
@@ -25,10 +27,12 @@ class ConfigurationsController < ApplicationController
   # PUT /configuration.json
   # PUT /configuration.xml
   def update
+    valid_http_methods :put
+
     @configuration = ::Configuration.first
 
     respond_to do |format|
-      xml = Xmlhash.parse(request.raw_post).get("configuration")
+      xml = params["xmlhash"] || {}
       attribs = {}
       attribs[:title] = xml["title"] || params["title"]
       attribs[:description] = xml["description"] || params["description"]

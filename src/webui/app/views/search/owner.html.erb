@@ -1,4 +1,4 @@
-<% @pagetitle = "Search Maintainer/Bugowner" %>
+<% @pagetitle = "Search Owner" %>
 <% @crumb_list = [@pagetitle] -%>
 <% @layouttype = 'custom' %>
 
@@ -12,6 +12,7 @@
 
 <div class="grid_16 alpha omega box box-shadow">
 <%= render :partial => 'tabs' %>
+  <h3>Search for people responsible for package:</h3>
   <div id="search_form">
   <%= form_tag({:controller => 'search', :action => 'owner'}, {:method => :get}) do -%>
   <p>
@@ -25,12 +26,18 @@
     <div id="advanced_container" style="display: none;">
     <h4>Advanced:</h4>
     <p>
-    <% if params[:devel].nil? or params[:devel] == "0" %>
-      <input type="hidden" name="devel" value="0" />
-      <input id="devel" name="devel" type="checkbox" value="1" />
-    <% elsif params[:devel] == "1" %>
-      <input type="hidden" name="devel" value="0" />
-      <input checked="checked" id="devel" name="devel" type="checkbox" value="1" />
+    <% if params[:devel] == "off" %>
+      <input checked="checked" id="nodevel" name="devel" type="radio" value="off" />
+      <label for="nodevel">Ignore Devel Projects</label>
+      <input id="devel" name="devel" type="radio" value="on" />
+    <% elsif params[:devel] == "on" %>
+      <input id="nodevel" name="devel" type="radio" value="off" />
+      <label for="nodevel">Ignore Devel Projects</label>
+      <input checked="checked" id="devel" name="devel" type="radio" value="on" />
+    <% else %>
+      <input id="nodevel" name="devel" type="radio" />
+      <label for="nodevel">Ignore Devel Projects</label>
+      <input id="devel" name="devel" type="radio" />
     <% end %>
     <label for="devel">Follow Devel Projects</label>
     </p>
@@ -73,4 +80,18 @@
   <% end %>
   </div> <!-- end search_form -->
 <%= render :partial => 'results' %>
+
+<% unless @results.nil? || @results.length < 1 %>
+  <div>
+  <% projects = [] %>
+  <% @results.each do |result| %>
+    <% link = Hash["project", result[:data].project, "package", result[:data].package ] %>
+    <% projects << link %>
+  <% end %>
+    <p>
+      <%= link_to(image_tag('user_add.png', :title => "Request bugowner change"), {:controller => :request, :action => :set_bugowner_request_dialog, :projects => projects}, :remote => true) %>
+      <%= link_to("Request bugowner change", {:controller => :request, :action => :set_bugowner_request_dialog, :projects => projects}, :remote => true) %>
+    </p>
+  </div>
+<% end %>
 </div>

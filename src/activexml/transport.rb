@@ -28,6 +28,14 @@ module ActiveXML
         return @xml['exception']
       end
 
+      def details
+        parse!
+        if @xml.has_key? 'details'
+	  return @xml['details']
+        end
+        return nil
+      end
+
       def summary
         parse!
         if @xml.has_key? 'summary'
@@ -71,6 +79,7 @@ module ActiveXML
       uri = URI( target )
       replace_server_if_needed( uri )
       #logger.debug "setting up transport for model #{model}: #{uri} opts: #{opt}"
+      raise "overwriting #{model}" if @mapping.has_key? model
       @mapping[model] = {:target_uri => uri, :opt => opt}
     end
 
@@ -314,6 +323,8 @@ module ActiveXML
         if not @http
           @http = Net::HTTP.new(url.host, url.port)
           @http.use_ssl = true if url.scheme == "https"
+          # esp. for the appliance we trust the localhost or we have problems anyway
+          @http.verify_mode = OpenSSL::SSL::VERIFY_NONE if url.host == "localhost"
           @http.start
         end
         @http.read_timeout = opt[:timeout]
@@ -388,11 +399,52 @@ module ActiveXML
 
       return handle_response( http_response )
     end
+    
+    def load_external_url(uri)
+      uri = URI.parse(uri)
+      http = nil
+      content = nil
+      proxyuri = ENV['http_proxy']
+      proxyuri = CONFIG['http_proxy'] unless CONFIG['http_proxy'].blank?
+      if proxyuri
+        proxy = URI.parse(proxyuri)
+        proxy_user, proxy_pass = proxy.userinfo.split(/:/) if proxy.userinfo
+        http = Net::HTTP::Proxy(proxy.host, proxy.port, proxy_user, proxy_pass).new(uri.host, uri.port)
+      else
+        http = Net::HTTP.new(uri.host, uri.port)
+      end
+      http.use_ssl = (uri.scheme == 'https')
+      begin
+        http.start
+        response = http.get uri.request_uri
+        if response.is_a?(Net::HTTPSuccess)
+          content = response.body
+        end
+      rescue SocketError, Errno::EINTR, Errno::EPIPE, EOFError, Net::HTTPBadResponse, IOError, 
+        Errno::ETIMEDOUT, Errno::ECONNREFUSED, Timeout::Error => err
+        logger.debug "#{err} when fetching #{uri.to_s}"
+        http = nil
+      end
+      http.finish if http && http.started?
+      return content
+    end
+
+    # small helper function to avoid having to hardcode the content_type all around
+    def http_json(method, uri, data)
+      http_do method, uri, data: data.to_json, content_type: "application/json"
+    end
+
+    # needed for streaming data - to avoid the conversion to UTF-8 and similiar to change what "length" is
+    def last_body_length
+      return @last_body_length || 0
+    end
 
     def handle_response( http_response )
       case http_response
       when Net::HTTPSuccess, Net::HTTPRedirection
-        return http_response.read_body.force_encoding("UTF-8")
+        body = http_response.read_body
+	@last_body_length = body.length
+        return body.force_encoding("UTF-8")
       when Net::HTTPNotFound
         raise NotFoundError, http_response.read_body.force_encoding("UTF-8")
       when Net::HTTPUnauthorized

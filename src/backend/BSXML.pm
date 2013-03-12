@@ -445,20 +445,6 @@ our $sourceinfolist = [
       [ $sourceinfo ],
 ];
 
-our $buildstatistics = [
-    'buildstatistics' =>
-	[ 'disk' =>
-              [],
-              'max_usage',
-              'io_requests',
-              'io_sectors',
-        ],
-	[ 'memory' =>
-              'max_usage',
-        ],
-#	'cpu' =>
-];
-
 our $buildinfo = [
     'buildinfo' =>
 	'project',
@@ -523,6 +509,7 @@ our $buildinfo = [
 	    'server',
      ]],
 	'expanddebug',
+	'followupfile',	# for two-stage builds
 ];
 
 our $jobstatus = [
@@ -1219,6 +1206,7 @@ our $person = [
 	'login',
 	'email',
 	'realname',
+	'state',
 	[ 'globalrole' ],
 	[ 'watchlist' =>
 		[[ 'project' =>
@@ -1505,12 +1493,34 @@ our $attributes = [
       [ $attribute ],
 ];
 
+our $size = [
+     'size' => 
+         'unit',
+         [],
+         '_content',
+];
+
+our $time = [
+     'time' => 
+         'unit',
+         [],
+         '_content',
+];
+
 # define constraints for build jobs in packages or projects.
 our $constraints = [
   'constraints' => 
     [],
-    'hostlabel', # workers might get labels defined by admin, for example for benchmarking.
-    'sandbox',   # xen/kvm/chroot/secure
+  [ 'hostlabel' =>
+       'exclude',   # true or false. default is false.
+       [],
+       '_content' # workers might get labels defined by admin, for example for benchmarking.
+  ],
+  [ 'sandbox' =>
+       'exclude',   # true or false. default is false.
+       [],
+       '_content' # xen/kvm/zvm/lxc/emulator/chroot/secure
+  ],
   [ 'linux' =>
       [ 'version' =>
         [],
@@ -1524,19 +1534,35 @@ our $constraints = [
 	 [ 'flag' ],
       ],
 	'processors',
-      [ 'disk' =>
-	  [ 'size' => 
-		'unit',
-		'_content'
-	  ],
-      ],
-      [ 'memory' =>
-	  [ 'size' => 
-		'unit',
-		'_content'
-          ],
-      ],
+      [ 'disk' => $size ],
+      [ 'memory' => $size ],
+      [ 'physicalmemory' => $size ],
   ],
+];
+
+our $buildstatistics = [
+    'buildstatistics' =>
+	[ 'disk' =>
+              [ 'usage' => 
+                 [ 'size' =>
+                     'unit',
+                     [],
+                     '_content',
+                 ],
+                 'io_requests',
+                 'io_sectors',
+              ],
+        ],
+	[ 'memory' =>
+              [ 'usage' => $size ],
+        ],
+	[ 'times' =>
+              [ 'total' => $time ],
+              [ 'preinstall' => $time ],
+              [ 'install' => $time ],
+              [ 'main' => $time ],
+        ],
+#	'cpu' =>
 ];
 
 

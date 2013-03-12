@@ -79,13 +79,13 @@ class RequestController < ApplicationController
       oldrequest = BsRequest.find params[:id]
       oldrequest.destroy
 
-      notify = oldrequest.notify_parameters
-      Suse::Backend.send_notification("SRCSRV_REQUEST_CHANGE", notify)
-
       req = BsRequest.new_from_xml(request.body.read)
       req.id = params[:id]
       req.save!
       
+      notify = oldrequest.notify_parameters
+      Suse::Backend.send_notification("SRCSRV_REQUEST_CHANGE", notify)
+
       send_data(req.render_xml, :type => "text/xml")
     end
   end
@@ -485,9 +485,11 @@ class RequestController < ApplicationController
         return false
       end
       if tprj.class == Project and (a = tprj.find_attribute("OBS", "RejectRequests") and a.values.first)
-        render_error :status => 403, :errorcode => 'request_rejected',
-        :message => "The target project #{action.target_project} is not accepting requests because: #{a.values.first.value.to_s}"
-        return false
+        if a.values.length < 2 or a.values.find_by_value(action.action_type)
+          render_error :status => 403, :errorcode => 'request_rejected',
+            :message => "The target project #{action.target_project} is not accepting requests because: #{a.values.first.value.to_s}"
+          return false
+        end
       end
       if action.target_package
         if Package.exists_by_project_and_name(action.target_project, action.target_package) or [:delete, :change_devel, :add_role, :set_bugowner].include? action.action_type
@@ -495,9 +497,11 @@ class RequestController < ApplicationController
         end
         
         if tpkg && (a = tpkg.find_attribute("OBS", "RejectRequests") and a.values.first)
-          render_error :status => 403, :errorcode => 'request_rejected',
-          :message => "The target package #{action.target_project} / #{action.target_package} is not accepting requests because: #{a.values.first.value.to_s}"
-          return false
+          if a.values.length < 2 or a.values.find_by_value(action.action_type)
+            render_error :status => 403, :errorcode => 'request_rejected',
+              :message => "The target package #{action.target_project} / #{action.target_package} is not accepting requests because: #{a.values.first.value.to_s}"
+            return false
+          end
         end
       end
     end
@@ -680,7 +684,7 @@ class RequestController < ApplicationController
       tpkg = nil
 
       if action.target_project
-        tprj = Project.find_by_name action.target_project
+        tprj = Project.get_by_name action.target_project
         if action.target_package
           if action.target_repository and action.action_type == :delete
             render_error :status => 400, :errorcode => "invalid_request",
@@ -695,6 +699,9 @@ class RequestController < ApplicationController
             else
               tpkg = tprj.find_package action.target_package.gsub(/\.[^\.]*$/, '')
             end
+          elsif [ :set_bugowner, :add_role, :change_devel, :delete ].include? action.action_type 
+            # target must exists
+            tpkg = tprj.packages.find_by_name! action.target_package
           else
             # just the direct affected target
             tpkg = tprj.packages.find_by_name action.target_package
@@ -1152,14 +1159,15 @@ class RequestController < ApplicationController
             end
           else
             if action.action_type == :delete
-              # this is valid for project and repository removal
-              target_project.can_be_deleted?
-
               if action.target_repository
                 r=Repository.find_by_project_and_repo_name(target_project.name, action.target_repository)
                 unless r
                   render_error :status => 400, :errorcode => "repository_missing", :message => "The repository #{target_project} / #{action.target_repository} does not exist"
+                  return
                 end
+              else
+                # remove entire project
+                target_project.can_be_deleted?
               end
             end
           end
@@ -1337,7 +1345,7 @@ class RequestController < ApplicationController
     projectCommit = {}
 
     # use the request description as comments for history
-    params[:comment] = req.description
+    source_history_comment = req.description
 
     # We have permission to change all requests inside, now execute
     req.bs_request_actions.each do |action|
@@ -1393,7 +1401,7 @@ class RequestController < ApplicationController
             :opackage => action.source_package,
             :noservice => 1,
             :requestid => params[:id],
-            :comment => params[:comment],
+            :comment => source_history_comment,
 	    :withacceptinfo => 1
           }
           cp_params[:orev] = action.source_rev if action.source_rev
@@ -1501,7 +1509,7 @@ class RequestController < ApplicationController
               project.destroy
               delete_path = "/source/#{action.target_project}"
             end
-            h = { :user => @http_user.login, :comment => params[:comment], :requestid => params[:id] }
+            h = { :user => @http_user.login, :comment => source_history_comment, :requestid => params[:id] }
             delete_path << build_query_from_hash(h, [:user, :comment, :requestid])
             Suse::Backend.delete delete_path
           end
@@ -1549,7 +1557,7 @@ class RequestController < ApplicationController
         del_params = {
           :user => @http_user.login,
           :requestid => params[:id],
-          :comment => params[:comment]
+          :comment => source_history_comment
         }
         delete_path << build_query_from_hash(del_params, [:user, :comment, :requestid])
         Suse::Backend.delete delete_path
@@ -1609,7 +1617,7 @@ class RequestController < ApplicationController
     end
 
     # maintenance_incident request are modifying the request during accept
-    req.change_state(params[:newstate], :comment => params[:comment], :superseded_by => params[:superseded_by])
+    req.change_state(params[:newstate], params)
     render_ok
   end
 

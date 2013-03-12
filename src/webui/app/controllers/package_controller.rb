@@ -29,7 +29,7 @@ class PackageController < ApplicationController
     end
     @bugowners_mail = []
     (@package.bugowners + @project.bugowners).uniq.each do |bugowner|
-        mail = bugowner.email
+        mail = bugowner.email if bugowner
         @bugowners_mail.push(mail.to_s) if mail
     end unless @spider_bot
     @revision = params[:rev]
@@ -90,6 +90,24 @@ class PackageController < ApplicationController
     unless @fileinfo # avoid displaying an error for non-existing packages
       redirect_back_or_to(:action => "binary", :project => params[:project], :package => params[:package], :repository => @repository, :arch => @arch, :filename => @filename)
     end
+  end
+
+  def statistics
+    required_parameters :arch, :repository
+    @arch = params[:arch]
+    @repository = params[:repository]
+    begin
+      @statistics = Statistic.find( :project => @project, :package => @package, :repository => @repository, :arch => @arch )
+    rescue ActiveXML::Transport::ForbiddenError => e
+      flash[:error] = "Statistics can not be downloaded from #{@project} #{@package} #{@repository} #{@arch}: #{e.summary}"
+    end 
+    unless @statistics
+      flash[:error] = "No statistics of a successful build could be found in #{@repository}/#{@arch}"
+      redirect_to :controller => "package", :action => :binaries, :project => @project, 
+        :package => @package, :repository => @repository, :nextstatus => 404
+      return
+    end
+    logger.debug "accepting #{request.accepts.join(',')} format:#{request.format}"
   end
 
   def binary
@@ -244,6 +262,7 @@ class PackageController < ApplicationController
     rescue ActiveXML::Transport::Error => e
       if @expand == 1
         @forced_unexpand = e.summary
+        @forced_unexpand = e.details if e.details
         @expand = 0
         return set_file_details
       end
@@ -774,7 +793,7 @@ class PackageController < ApplicationController
       if chunk.length == 0
         return  
       end
-      @offset += chunk.length
+      @offset += ActiveXML::transport.last_body_length
       yield chunk
     end
   end
@@ -830,7 +849,7 @@ class PackageController < ApplicationController
       logger.error "Got #{e.class}: #{e.message}; returning empty log."
       @initiallog = ''
     end
-    @offset = (@offset || 0) + @initiallog.length
+    @offset = (@offset || 0) + ActiveXML::transport.last_body_length
   end
 
 
@@ -850,15 +869,19 @@ class PackageController < ApplicationController
       if( @log_chunk.length == 0 )
         @finished = true
       else
-        @offset += @log_chunk.length
+        @offset += ActiveXML::transport.last_body_length
       end
 
-    rescue Timeout::Error
+    rescue Timeout::Error, IOError
       @log_chunk = ""
 
-    rescue
-      @log_chunk = "No live log available"
-      @finished = true
+    rescue ActiveXML::Transport::Error => e
+      if e.summary =~ %r{Logfile is not that big}
+        @log_chunk = ""
+      else
+        @log_chunk = "No live log available: #{e.summary}\n"
+	@finished = true
+      end
     end
 
     logger.debug 'finished ' + @finished.to_s

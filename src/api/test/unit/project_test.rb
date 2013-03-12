@@ -38,7 +38,7 @@ class ProjectTest < ActiveSupport::TestCase
     axml = Xmlhash.parse(
       "<project name='home:Iggy'>
         <title>Iggy's Home Project</title>
-        <description></description> 
+        <description>dummy</description>
         <build> 
           <disable repository='10.2' arch='i586'/>
         </build>
@@ -96,7 +96,7 @@ class ProjectTest < ActiveSupport::TestCase
     axml = Xmlhash.parse(
       "<project name='home:Iggy'>
         <title>Iggy's Home Project</title>
-        <description></description> 
+        <description>dummy</description>
       </project>"
       )    
     
@@ -113,7 +113,7 @@ class ProjectTest < ActiveSupport::TestCase
     axml = Xmlhash.parse(
       "<project name='home:Iggy'>
         <title>Iggy's Home Project</title>
-        <description></description>
+        <description>dummy</description>
         <debuginfo>
           <disable repository='10.0' arch='i586'/>
         </debuginfo>    
@@ -135,7 +135,7 @@ class ProjectTest < ActiveSupport::TestCase
     axml = Xmlhash.parse(
       "<project name='home:Iggy'>
         <title>Iggy's Home Project</title>
-        <description></description>
+        <description>dummy</description>
         <repository name='images'>
           <arch>local</arch>
           <arch>i586</arch>
@@ -156,7 +156,7 @@ class ProjectTest < ActiveSupport::TestCase
     axml = Xmlhash.parse(
       "<project name='home:Iggy'>
         <title>Iggy's Home Project</title>
-        <description></description>
+        <description>dummy</description>
         <repository name='images'>
           <arch>i586</arch>
           <arch>x86_64</arch>
@@ -180,7 +180,7 @@ class ProjectTest < ActiveSupport::TestCase
      axml = Xmlhash.parse(
       "<project name='home:Iggy'>
         <title>Iggy's Home Project</title>
-        <description></description>
+        <description>dummy</description>
         <repository name='10.2'>
           <arch>x86_64</arch>
         </repository>
@@ -196,6 +196,57 @@ class ProjectTest < ActiveSupport::TestCase
      end
      @project.reload
      assert_equal orig, @project.render_axml
+  end
+
+  test "duplicated repos with remote" do
+     orig = @project.render_axml
+
+     xml = <<END
+<project name="home:Iggy">
+  <title>Iggy"s Home Project</title>
+  <description>dummy</description>
+  <repository name="remote_1">
+    <path project="RemoteInstance:remote_project_1" repository="standard"/>
+    <arch>i586</arch>
+  </repository>
+  <repository name="remote_1">
+    <path project="RemoteInstance:remote_project_1" repository="standard"/>
+    <arch>x86_64</arch>
+  </repository>
+</project>
+END
+     axml = Xmlhash.parse(xml)
+     assert_raise(ActiveRecord::RecordInvalid) do
+       Project.transaction do
+         @project.update_from_xml(axml)
+       end
+     end
+     @project.reload
+     assert_equal orig, @project.render_axml
+  end
+  test "not duplicated repos with remote" do
+     xml = <<END
+<project name="home:Iggy">
+  <title>Iggy"s Home Project</title>
+  <description>dummy</description>
+  <repository name="remote_2">
+    <path project="RemoteInstance:remote_project_2" repository="standard"/>
+    <arch>x86_64</arch>
+    <arch>i586</arch>
+  </repository>
+  <repository name="remote_1">
+    <path project="RemoteInstance:remote_project_1" repository="standard"/>
+    <arch>x86_64</arch>
+    <arch>i586</arch>
+  </repository>
+</project>
+END
+     axml = Xmlhash.parse(xml)
+     Project.transaction do
+       @project.update_from_xml(axml)
+     end
+     @project.reload
+     assert_equal xml, @project.render_axml
   end
 
   def test_create_maintenance_project_and_maintained_project

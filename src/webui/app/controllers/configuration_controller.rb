@@ -11,6 +11,22 @@ class ConfigurationController < ApplicationController
   def connect_instance
   end
 
+  def users
+    @users = []
+    Person.find(:all).each do |u|
+      person = Person.find(u.value('name'))
+      @users << person if person
+    end
+  end
+  
+  def groups
+    @groups = []
+    Group.find(:all).each do |g|
+      group = Group.find(g.value('name'))
+      @groups << group if group
+    end
+  end
+
   def save_instance
     #store project
     required_parameters :name, :title, :description, :remoteurl
@@ -46,14 +62,13 @@ class ConfigurationController < ApplicationController
   end
 
   def update_configuration
-    if ! (params[:title] || params[:target_project])
+    if ! (params[:title] || params[:description])
       flash[:error] = "Missing arguments (title or description)"
       redirect_back_or_to :action => 'index' and return
     end
 
     begin
-      data = "<configuration><description>#{CGI.escapeHTML(params[:description])}</description><title><#{CGI.escapeHTML(params[:title])}/title></configuration>"
-      ActiveXML::transport.direct_http(URI('/configuration'), :method => 'PUT', :data => data)
+      ActiveXML::transport.http_json :put, '/configuration', { description: params[:description], title: params[:title] }
       flash[:note] = "Updated configuration"
       Rails.cache.delete('configuration')
     rescue ActiveXML::Transport::Error 

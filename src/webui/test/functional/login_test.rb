@@ -8,11 +8,11 @@ class LoginTest < ActionDispatch::IntegrationTest
   #
   def open_home
     find(:css, "div#subheader a[href='/home']").click
-    assert page.has_text? "Profile picture:"
+    page.must_have_text "Edit your account"
   end
 
   def user_real_name
-    t = first(:css, "div#content span#real-name")
+    t = find(:id, "home-realname")
     if t
       return t.text
     else
@@ -23,14 +23,14 @@ class LoginTest < ActionDispatch::IntegrationTest
 
   #
   def change_user_real_name new_name
-    find(:css, "div#content a[href='/user/edit']").click
+    find(:id, 'save_dialog').click
 
     fill_in "realname", with: new_name
     find(:css, "form[action='/user/save'] input[name='commit']").click
 
-    assert_equal "User data for user '#{current_user}' successfully updated.", flash_message
-    assert_equal :info, flash_message_type
-    assert_equal new_name, user_real_name
+    flash_message.must_equal "User data for user '#{current_user}' successfully updated."
+    flash_message_type.must_equal :info
+    user_real_name.must_equal new_name
   end
 
 
@@ -54,10 +54,10 @@ class LoginTest < ActionDispatch::IntegrationTest
     within('#login-form') do
       fill_in 'Username', with: 'dasdasd'
       fill_in 'Password', with: 'dasdasd'
-      click_button 'Login'
+      click_button 'Log In'
     end
-    assert_equal "Authentication failed", flash_message
-    assert_equal :alert, flash_message_type
+    flash_message.must_equal "Authentication failed"
+    flash_message_type.must_equal :alert
 
     login_Iggy
     logout
@@ -71,10 +71,10 @@ class LoginTest < ActionDispatch::IntegrationTest
     within('#login-form') do
       fill_in 'Username', with: ''
       fill_in 'Password', with: ''
-      click_button 'Login'
+      click_button 'Log In'
     end
-    assert_equal "Authentication failed", flash_message
-    assert_equal :alert, flash_message_type
+    flash_message.must_equal "Authentication failed"
+    flash_message_type.must_equal :alert
     
   end
 
@@ -99,7 +99,7 @@ class LoginTest < ActionDispatch::IntegrationTest
     logout
     login_Iggy
     open_home
-    assert_equal new_name, user_real_name
+    user_real_name.must_equal new_name
   end
   
 end

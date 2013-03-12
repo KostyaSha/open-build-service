@@ -822,6 +822,12 @@ class User < ActiveRecord::Base
     end
   end
 
+  def to_axml
+    Rails.cache.fetch('meta_user_%d' % id) do
+      render_axml
+    end
+  end
+
   def render_axml( watchlist = false )
     builder = Nokogiri::XML::Builder.new
  
@@ -832,6 +838,8 @@ class User < ActiveRecord::Base
       realname = self.realname
       realname.toutf8
       person.realname( realname )
+      # FIXME 2.5: turn the state into an enum
+      person.state( User.states.keys[self.state-1] )
 
       self.roles.global.each do |role|
         person.globalrole( role.title )
@@ -841,7 +849,7 @@ class User < ActiveRecord::Base
       if watchlist
         person.watchlist() do |wl|
           self.watched_projects.each do |wp|
-            wl.project( :name => wp.project.name )
+            wl.project( :name => wp.project.name ) if Project.valid_name?(wp.project.name)
           end
         end
       end

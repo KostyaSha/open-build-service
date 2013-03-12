@@ -54,8 +54,9 @@ class ApplicationController < ActionController::API
     logger.debug "Checking for  Admin role for user #{@http_user.login}"
     unless @http_user.is_admin?
       logger.debug "not granted!"
-      render_error :status => 403, :errorcode => "put_request_no_permission", :message => "Requires admin privileges" and return
+      render_error :status => 403, :errorcode => "put_request_no_permission", :message => "Requires admin privileges" and return false
     end
+    return true
   end
 
   def http_anonymous_user 
@@ -75,9 +76,11 @@ class ApplicationController < ActionController::API
   end
 
   def validate_params
-    params.each do |p|
-      if not p[1].nil? and p[1].class != String
-        raise InvalidParameterError, "Parameter #{p[0]} has non String class #{p[1].class}"
+    params.each do |key, value|
+      next if value.nil?
+      next if key == 'xmlhash' # perfectly fine
+      if !value.kind_of? String
+        raise InvalidParameterError, "Parameter #{key} has non String class #{key.class}"
       end
     end
   end
@@ -406,7 +409,7 @@ class ApplicationController < ActionController::API
   end
 
   rescue_from Timeout::Error do |exception|
-     render_error status: 408, errorcode: "timeout_error", message: exception.message
+    render_error status: 408, errorcode: "timeout_error", message: exception.message
   end
 
   rescue_from APIException do |exception|

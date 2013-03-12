@@ -117,9 +117,9 @@ module ApplicationHelper
     abs_path
   end
 
-  def user_icon(login, size=20)
+  def user_icon(login, size=20, css_class=nil)
     return image_tag(url_for(controller: :home, action: :icon, user: login.to_s, size: size), 
-                     width: size, height: size)
+                     width: size, height: size, class: css_class)
   end
 
   def fuzzy_time_string(time)
@@ -430,16 +430,13 @@ module ApplicationHelper
 
     content_for(:content_for_head, javascript_include_tag('cm2'))
     style = ''
+    style += ".CodeMirror {\n"
     if opts[:no_border] || opts[:read_only]
-      style += ".CodeMirror { border-width: 0 0 0 0; }\n"
+      style += "border-width: 0 0 0 0;\n"
     end
-
-    style += ".CodeMirror-scroll {\n"
-    style += "height: #{opts[:height]};\n"
-    if opts[:height] == 'auto'
-      style += "overflow: auto;\n"
-    end
-    style += "width: #{opts[:width]}; \n}\n"
+    style += "height: #{opts[:height]};\n" unless opts[:height] == 'auto'
+    style += "width: #{opts[:width]}; \n" unless opts[:width] == 'auto'
+    style += "}\n"
     content_for(:head_style, style)
     return @codemirror_editor_setup
   end

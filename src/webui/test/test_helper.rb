@@ -1,3 +1,5 @@
+# encoding: utf-8
+#
 ENV["RAILS_ENV"] = "test"
 require 'simplecov'
 require 'simplecov-rcov'
@@ -6,11 +8,13 @@ SimpleCov.start 'rails' if ENV["DO_COVERAGE"]
 require File.expand_path('../../config/environment', __FILE__)
 require 'rails/test_help'
 require 'test/unit/assertions'
+require "mocha/setup"
 
 require 'headless'
 
 require 'capybara/rails'
-Capybara.default_driver = :selenium
+Capybara.default_driver = :webkit
+#Capybara.default_driver = :selenium
 # this is the build service! 2 seconds - HAHAHA
 Capybara.default_wait_time = 10
 
@@ -28,11 +32,11 @@ class ActionDispatch::IntegrationTest
     within('#login-form') do
       fill_in 'Username', with: user
       fill_in 'Password', with: password
-      click_button 'Login'
+      click_button 'Log In'
     end
     @current_user = user
     if do_assert
-      assert find('#flash-messages').has_content?("You are logged in now")
+      find('#flash-messages').must_have_content("You are logged in now")
     end
   end
 
@@ -53,6 +57,10 @@ class ActionDispatch::IntegrationTest
     login_user("king", "sunflower", false)
   end
 
+  def login_fred
+    login_user("fred", "geröllheimer")
+  end
+
   def logout
     @current_user = nil
     ll = page.first('#logout-link')
@@ -66,13 +74,13 @@ class ActionDispatch::IntegrationTest
   @@display = nil
 
   setup do
-    if !@@display && ENV['HEADLESS']
+    if !@@display
       @@display = Headless.new
       @@display.start
     end
     olddriver = Capybara.current_driver
     Capybara.current_driver = :rack_test
-    5.times do
+    10.times do
       begin
         visit '/'
         ENV['API_STARTED'] = '1'
@@ -80,6 +88,7 @@ class ActionDispatch::IntegrationTest
       rescue Timeout::Error
       end
     end unless ENV['API_STARTED']
+    raise "No api" unless ENV['API_STARTED']
     ActiveXML::transport.http_do :post, "/test/test_start"
     Capybara.current_driver = olddriver
     @starttime = Time.now
@@ -152,9 +161,9 @@ class ActionDispatch::IntegrationTest
   def delete_package project, package
     visit package_show_path(package: package, project: project)
     find(:id, 'delete-package').click
-    assert find(:id, 'del_dialog').has_text? 'Delete Confirmation'
+    find(:id, 'del_dialog').must_have_text 'Delete Confirmation'
     find_button("Ok").click
-    assert find('#flash-messages').has_text? "Package '#{package}' was removed successfully"
+    find('#flash-messages').must_have_text "Package '#{package}' was removed successfully"
   end
 
 end

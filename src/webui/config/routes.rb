@@ -28,6 +28,8 @@ OBSWebUI::Application.routes.draw do
 
   controller :configuration do
     match 'configuration/' => :index
+    match 'configuration/users' => :users
+    match 'configuration/groups' => :groups
     match 'configuration/connect_instance' => :connect_instance
     match 'configuration/save_instance' => :save_instance
     match 'configuration/update_configuration' => :update_configuration, via: :post
@@ -39,22 +41,6 @@ OBSWebUI::Application.routes.draw do
     match 'driver_update/edit' => :edit
     match 'driver_update/save' => :save, via: :post
     match 'driver_update/binaries' => :binaries
-  end
-
-  resources :groups, :controller => 'group', :only => [:index, :show] do
-    collection do
-      get 'autocomplete'
-    end
-  end
-
-  controller :home do
-    match 'home/' => :index
-    match 'home/:user/icon' => :icon, constraints: cons
-    match 'home/my_work' => :my_work
-    match 'home/requests' => :requests
-    match 'home/home_project' => :home_project
-    match 'home/list_my' => :list_my
-    match 'home/remove_watched_project' => :remove_watched_project
   end
 
   controller :monitor do
@@ -72,6 +58,7 @@ OBSWebUI::Application.routes.draw do
     match 'package/binaries' => :binaries
     match 'package/users' => :users
     match 'package/requests' => :requests
+    match 'package/statistics' => :statistics
     match 'package/commit' => :commit
     match 'package/revisions' => :revisions
     match 'package/submit_request_dialog' => :submit_request_dialog
@@ -217,9 +204,11 @@ OBSWebUI::Application.routes.draw do
     match 'request/list' => :list
     match 'request/list_small' => :list_small
     match 'request/delete_request_dialog' => :delete_request_dialog
-    match 'request/delete_request' => :delete_request
+    match 'request/delete_request' => :delete_request, via: :post
     match 'request/add_role_request_dialog' => :add_role_request_dialog
-    match 'request/add_role_request' => :add_role_request
+    match 'request/add_role_request' => :add_role_request, via: :post
+    match 'request/set_bugowner_request_dialog' => :set_bugowner_request_dialog
+    match 'request/set_bugowner_request' => :set_bugowner_request, via: :post
     match 'request/change_devel_request_dialog' => :change_devel_request_dialog
     match 'request/change_devel_request' => :change_devel_request
     match 'request/set_incident_dialog' => :set_incident_dialog
@@ -232,15 +221,51 @@ OBSWebUI::Application.routes.draw do
   end
 
   controller :user do
+  
+    match 'user/:user/edit' => :edit
+    match 'user/:user/login' => :login
+    match 'user/:user/logout' => :logout
+    match 'user/save_dialog' => :save_dialog
+    match 'user/save' => :save, via: :post
+    match 'user/confirm' => :confirm, via: :post
+    match 'user/lock' => :lock, via: :post
+    match 'user/admin' => :admin, via: :post
+    match 'user/delete' => :delete, via: :delete
+    match 'user/change_password' => :change_password, via: :post
+    match 'user/autocomplete' => :autocomplete
+    match 'user/tokens' => :tokens
+  
     match 'user/do_login' => :do_login
     match 'user/edit' => :edit
+    match 'user/:user/edit' => :edit
     match 'user/register' => :register, via: :post
     match 'user/register_user' => :register_user
     match 'user/login' => :login
     match 'user/logout' => :logout
-    match 'user/save' => :save
+    match 'user/save_dialog' => :save_dialog
+    match 'user/save' => :save, via: :post
     match 'user/change_password' => :change_password, via: :post
     match 'user/autocomplete' => :autocomplete
+  end
+
+  controller :group do
+    match 'group/show'  => :show
+    match 'group/add'  => :add
+    match 'group/save' => :save, via: :post
+    match 'group/autocomplete' => :autocomplete
+    match 'group/tokens' => :tokens
+    match 'group/edit' => :edit
+  end
+      
+  controller :home do
+    # Only here to make old url's work
+    match 'home/' => :index 
+    match 'home/my_work' => :index
+    match 'home/list_my' => :index
+    match 'home/requests' => :requests
+    match 'home/home_project' => :home_project
+    match 'home/remove_watched_project' => :remove_watched_project
+    match 'user/:user/icon' => :icon, constraints: cons
   end
 
   ### /apidocs

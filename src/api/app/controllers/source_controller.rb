@@ -142,31 +142,7 @@ class SourceController < ApplicationController
       pro.can_be_deleted?
 
       # find linking repos
-      lreps = Array.new
-      pro.repositories.each do |repo|
-        repo.linking_repositories.each do |lrep|
-          lreps << lrep
-        end
-      end
-
-      if lreps.length > 0
-        if params[:force] and not params[:force].empty?
-          # replace links to this projects with links to the "deleted" project
-          del_repo = Project.find_by_name("deleted").repositories[0]
-          lreps.each do |link_rep|
-            link_rep.path_elements.each { |pe| pe.destroy }
-            link_rep.path_elements.create(:link => del_repo, :position => 1)
-            link_rep.save
-            # update backend
-            link_rep.project.store
-          end
-        else
-          lrepstr = lreps.map{|l| l.project.name+'/'+l.name}.join "\n"
-          render_error :status => 403, :errorcode => "repo_dependency",
-            :message => "Unable to delete project #{project_name}; following repositories depend on this project:\n#{lrepstr}\n"
-          return
-        end
-      end
+      private_check_and_remove_repositories(params, pro.repositories) or return
 
       # Find open requests with 'pro' as source or target and decline/revoke them.
       # Revoke if source or decline if target went away, pick the first action that matches to decide...
@@ -304,9 +280,9 @@ class SourceController < ApplicationController
     end
     #
     if origin_package_name and not origin_project_name
-        render_error :status => 404, :errorcode => "missing_argument",
-        :message => "origin package name is specified, but no origin project"
-        return
+      render_error :status => 404, :errorcode => "missing_argument",
+                   :message => "origin package name is specified, but no origin project"
+      return
     end
 
     # Check for existens/access of origin package when specified
@@ -802,29 +778,15 @@ class SourceController < ApplicationController
         end
       end
 
-      # find linking repos which get deleted
-      removedRepositories = Array.new
-      linkingRepositories = Array.new
       if prj
+        removedRepositories = Array.new
         prj.repositories.each do |repo|
           if !new_repo_names[repo.name] and not repo.remote_project_name
             # collect repositories to remove
             removedRepositories << repo
-            linkingRepositories += repo.linking_repositories
           end
         end
-      end
-      if linkingRepositories.length > 0
-        unless params[:force] and not params[:force].empty?
-          lrepstr = linkingRepositories.map{|l| l.project.name+'/'+l.name}.join "\n"
-          render_error :status => 400, :errorcode => "repo_dependency",
-            :message => "Unable to delete repository; following repositories depend on this project:\n#{lrepstr}\n"
-          return
-        end
-      end
-      if removedRepositories.length > 0
-        # do remove
-        private_remove_repositories( removedRepositories, (params[:remove_linking_repositories] and not params[:remove_linking_repositories].empty?) )
+        private_check_and_remove_repositories(params, removedRepositories) or return
       end
 
       Project.transaction do
@@ -1233,6 +1195,35 @@ class SourceController < ApplicationController
     render_ok :data => {:targetproject => incident.project.name}
   end
 
+  def private_check_and_remove_repositories( params, removeRepositories )
+    # find linking repos which get deleted
+    linkingRepositories = Array.new
+    linkingTargetRepositories = Array.new
+    removeRepositories.each do |repo|
+      linkingRepositories += repo.linking_repositories
+      linkingTargetRepositories += repo.linking_target_repositories
+    end
+    unless params[:force] and not params[:force].empty?
+      if linkingRepositories.length > 0
+        lrepstr = linkingRepositories.map{|l| l.project.name+'/'+l.name}.join "\n"
+        render_error :status => 400, :errorcode => "repo_dependency",
+          :message => "Unable to delete repository; following repositories depend on this project:\n#{lrepstr}\n"
+        return false
+      end
+      if linkingTargetRepositories.length > 0
+        lrepstr = linkingTargetRepositories.map{|l| l.project.name+'/'+l.name}.join "\n"
+        render_error :status => 400, :errorcode => "repo_dependency",
+          :message => "Unable to delete repository; following target repositories depend on this project:\n#{lrepstr}\n"
+        return false
+      end
+    end
+    if removeRepositories.length > 0
+      # do remove
+      private_remove_repositories( removeRepositories, (params[:remove_linking_repositories] and not params[:remove_linking_repositories].empty?) )
+    end
+    return true
+  end
+
   def private_remove_repositories( repositories, full_remove = false )
     del_repo = Project.find_by_name("deleted").repositories[0]
 
@@ -1261,7 +1252,7 @@ class SourceController < ApplicationController
 
       # remove this repository, but be careful, because we may have done it already.
       if Repository.exists?(repo) and r=prj.repositories.find(repo)
-        logger.info "updating project '#{prj.name}'"
+        logger.info "destroy repo #{r.name} in '#{prj.name}'"
         r.destroy
         prj.store({:lowprio => true}) # low prio storage
       end
@@ -1443,9 +1434,14 @@ class SourceController < ApplicationController
     valid_http_methods :post
     project_name = params[:project]
     oproject = params[:oproject]
-    repository = params[:repository]
 
     oprj = Project.get_by_name( oproject )
+
+    if oprj.class == String # remote project
+      render_error :status => 404, :errorcode => "remote_project",
+        :message => "The copy from remote projects is currently not supported"
+      return
+    end
 
     unless @http_user.is_admin?
       if params[:withbinaries]
@@ -1454,11 +1450,13 @@ class SourceController < ApplicationController
         return
       end
 
-      oprj.packages.each do |pkg|
-        if pkg.disabled_for?('sourceaccess', nil, nil)
-          render_error :status => 403, :errorcode => "project_copy_no_permission",
-            :message => "no permission to copy project due to source protected package #{pkg.name}"
-          return
+      unless oprj.class == String
+        oprj.packages.each do |pkg|
+          if pkg.disabled_for?('sourceaccess', nil, nil)
+            render_error :status => 403, :errorcode => "project_copy_no_permission",
+              :message => "no permission to copy project due to source protected package #{pkg.name}"
+            return
+          end
         end
       end
     end
@@ -1466,22 +1464,28 @@ class SourceController < ApplicationController
     # create new project object based on oproject
     p = Project.find_by_name(project_name)
     Project.transaction do
-      p = Project.new :name => project_name, :title => oprj.title, :description => oprj.description
+      if oprj.class == String # remote project
+        rdata = Xmlhash.parse(backend_get("/source/#{URI.escape(oprj)}/_meta"))
+        p = Project.new :name => project_name, :title => rdata["title"], :description => rdata["description"]
+      else # local project
+        p = Project.new :name => project_name, :title => oprj.title, :description => oprj.description
+        p.save
+        oprj.flags.each do |f|
+          p.flags.create(:status => f.status, :flag => f.flag, :architecture => f.architecture, :repo => f.repo) unless f.flag == 'lock'
+        end
+        oprj.repositories.each do |repo|
+          r = p.repositories.create :name => repo.name
+          repo.repository_architectures.each do |ra|
+            r.repository_architectures.create! :architecture => ra.architecture, :position => ra.position
+          end
+          position = 0
+          repo.path_elements.each do |pe|
+            position += 1
+            r.path_elements << PathElement.new(:link => pe.link, :position => position)
+          end
+        end
+      end
       p.add_user @http_user, "maintainer"
-      oprj.flags.each do |f|
-        p.flags.create(:status => f.status, :flag => f.flag, :architecture => f.architecture, :repo => f.repo) unless f.flag == 'lock'
-      end
-      oprj.repositories.each do |repo|
-        r = p.repositories.create :name => repo.name
-        repo.repository_architectures.each do |ra|
-          r.repository_architectures.create! :architecture => ra.architecture, :position => ra.position
-        end
-        position = 0
-        repo.path_elements.each do |pe|
-          position += 1
-          r.path_elements << PathElement.new(:link => pe.link, :position => position)
-        end
-      end
       p.store
     end unless p
 
@@ -1748,7 +1752,7 @@ class SourceController < ApplicationController
     pack = Package.find_by_project_and_name( params[:project], params[:package] )
     if pack # in case of _project package
       pack.set_package_kind_from_commit(answer)
-      pack.update_activity
+      pack.sources_changed
     end
 
     if params[:package] == "_product"

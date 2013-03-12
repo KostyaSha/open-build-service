@@ -53,8 +53,43 @@ class SearchController < ApplicationController
       limit = nil
 
       if what == 'owner'
+        r = []
         collection = find_cached(Owner, :binary => "#{@search_text}", :limit => "#{@owner_limit}", :devel => "#{@owner_devel}", :expires_in => 5.minutes)
-        reweigh(collection, what)
+        collection.send("each_owner") do |result|
+          users = []
+          groups = []
+          if result.to_hash['person']
+            if result.to_hash['person'].class != Array
+              blah = []
+              blah << result.to_hash['person']
+              users = blah
+            else
+              result.to_hash['person'].each do |p|
+                users << p
+              end
+            end
+          end
+          if result.to_hash['group']
+            if result.to_hash['group'].class != Array
+              blah = []
+              blah << result.to_hash['group']
+              groups = blah
+            else
+              result.to_hash['group'].each do |g|
+                groups << g
+              end
+            end
+          end
+          project = find_cached(Project, result.project)
+          if result.package
+            package = find_cached(Package, result.package, :project => project)
+          end
+          r << {:type => "owner", :data => result,
+                :users => users, :groups => groups,
+                :project => project, :package => package,
+                :weight => 0}
+        end
+        @results.concat(r)
       end
       if what == 'package' or what == 'project'
         f = []
@@ -91,14 +126,14 @@ class SearchController < ApplicationController
         collection = find_cached(Collection, :what => what, :predicate => "[#{predicate}]", :expires_in => 5.minutes)
         reweigh(collection, what)
       end
-
-      if @results.length < 1
-        flash[:note] = "Your search did not return any results."
-      end
-      if @results.length > 200
-        @results = @results[0..199]
-        flash[:note] = "Your search returned more than 200 results. Please be more precise."
-      end
+    end
+    logger.debug "Found #{@results.length} search results: #{@results.inspect}"
+    if @results.length < 1
+      flash[:note] = "Your search did not return any results."
+    end
+    if @results.length > 200
+      @results = @results[0..199]
+      flash[:note] = "Your search returned more than 200 results. Please be more precise."
     end
   end
 
@@ -266,8 +301,8 @@ private
     @owner_limit = params[:limit] if !params[:limit].nil?
     
     @owner_devel = nil
-    @owner_devel = "0" if params[:devel].nil?
-    @owner_devel = params[:devel] if !params[:devel].nil?
+    @owner_devel = "0" if params[:devel] == "off"
+    @owner_devel = "1" if params[:devel] == "on"
   end
 
   def set_attribute_list

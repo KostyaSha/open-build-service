@@ -72,6 +72,7 @@ class Project < ActiveRecord::Base
   end
   
   def cleanup_before_destroy
+    del_repo = Project.find_by_name("deleted").repositories[0]
     # find linking repositories
     lreps = Array.new
     self.repositories.each do |repo|
@@ -81,16 +82,32 @@ class Project < ActiveRecord::Base
     end
     if lreps.length > 0
       #replace links to this projects with links to the "deleted" project
-      del_repo = Project.find_by_name("deleted").repositories[0]
       lreps.each do |link_rep|
         link_rep.path_elements.includes(:link).each do |pe|
           next unless Repository.find(pe.repository_id).db_project_id == self.id
           pe.link = del_repo
           pe.save
           #update backend
-          link_prj = link_rep.project
-          logger.info "updating project '#{link_prj.name}'"
-          Suse::Backend.put_source "/source/#{link_prj.name}/_meta", link_prj.to_axml
+          link_rep.project.write_to_backend
+        end
+      end
+    end
+    # find linking target repositories
+    lreps = Array.new
+    self.repositories.each do |repo|
+      repo.linking_target_repositories.each do |lrep|
+        lreps << lrep
+      end
+    end
+    if lreps.length > 0
+      #replace links to this projects with links to the "deleted" project
+      lreps.each do |link_rep|
+        link_rep.release_targets.includes(:target_repository).each do |rt|
+          next unless Repository.find(rt.repository_id).db_project_id == self.id
+          rt.target_repository = del_repo
+          rt.save
+          #update backend
+          link_rep.project.write_to_backend
         end
       end
     end
@@ -650,16 +667,21 @@ class Project < ActiveRecord::Base
 
     # delete remaining repositories in repocache
     repocache.each do |name, object|
-      #find repositories that link against this one and issue warning if found
-      list = PathElement.where(repository_id: object.id).all
-      unless list.empty?
-        logger.debug "offending repo: #{object.inspect}"
-        if force
-          object.destroy!
-        else
+      logger.debug "offending repo: #{object.inspect}"
+      unless force
+        #find repositories that link against this one and issue warning if found
+        list = PathElement.where(repository_id: object.id).all
+        error = ""
+        unless list.empty?
           linking_repos = list.map {|x| x.repository.project.name+"/"+x.repository.name}.join "\n"
-          raise SaveError, "Repository #{self.name}/#{name} cannot be deleted because following repos link against it:\n"+linking_repos
+          error << "Repository #{self.name}/#{name} cannot be deleted because following repos link against it:\n"+linking_repos
         end
+        list = ReleaseTarget.where(target_repository_id: object.id).all
+        unless list.empty?
+          linking_repos = list.map {|x| x.repository.project.name+"/"+x.repository.name}.join "\n"
+          error << "Repository #{self.name}/#{name} cannot be deleted because following repos define it as release target:/\n"+linking_repos
+        end
+        raise SaveError, error unless error.blank?
       end
       logger.debug "deleting repository '#{name}'"
       self.repositories.destroy object
@@ -1193,7 +1215,7 @@ class Project < ActiveRecord::Base
     # add all linked and indirect linked projects
     self.linkedprojects.each do |lp|
       if lp.linked_db_project.nil?
-        # FIXME: this is a remote project
+        projects << lp.linked_remote_project_name
       else
         lp.linked_db_project.expand_all_projects.each do |p|
           unless p_map[p]
@@ -1236,6 +1258,7 @@ class Project < ActiveRecord::Base
     m[:rootproject] = rootproject.name
     m[:project] = pkg.project.name
     m[:package] = pkg.name
+    m[:filter] = rolefilter
 
     # construct where condition
     sql = nil
@@ -1306,8 +1329,8 @@ class Project < ActiveRecord::Base
        
         already_checked[p.id] = 1
 
-        m = extract_maintainer(self, p.resolve_devel_package, filter) if devel == true
-        m = extract_maintainer(self, p, filter) unless m
+        m = extract_maintainer(self, p.resolve_devel_package, filter, owner) if devel == true
+        m = extract_maintainer(self, p, filter, owner) unless m
         if m
           break unless deepest
         end
@@ -1366,40 +1389,55 @@ class Project < ActiveRecord::Base
     return maintainers
   end
 
-  def find_containers(owner, limit=1, devel=true, filter=["maintainer","bugowner"] )
-    maintainers=[]
+  def find_containers(owner, devel=true, filter=["maintainer","bugowner"] )
     projects=self.expand_all_projects
 
-    match_all = (limit == 0)
-
-    already_checked = {}
-    matched_packages = {}
-    deepest_match = nil
-    projects.each do |project| # project link order
-      next unless project.class == Project
- 
-      project.packages.each do |pkg| # no order
-
-        next if matched_packages[pkg.name] # already found in upper project
-
-        m, limit, already_checked = lookup_package_owner(pkg, owner, limit, devel, filter, false, already_checked)
-
-        next unless m
-
-        # add entry
-        matched_packages[pkg.name] = 1
-        maintainers << m
-        limit = limit - 1
-        return maintainers if limit < 1 and not match_all
-      end
+    roles=[]
+    filter.each do |f|
+      roles << Role.find_by_title!(f)
     end
 
-    maintainers << deepest_match if deepest_match
+    found_packages = []
+    found_projects = []
+    # fast find packages with defintions
+    if owner.class == User
+      # user in package object
+      found_packages = PackageUserRoleRelationship.where(:role_id => roles, :bs_user_id => owner, :db_package_id => Package.where(:db_project_id => projects)).select(:db_package_id).map{ |p| p.db_package_id}
+      # user in project object
+      ProjectUserRoleRelationship.where(:role_id => roles, :bs_user_id => owner, :db_project_id => Project.where(:id => projects)).each do |prjrel|
+        found_projects << prjrel.db_project_id
+      end
+    elsif owner.class == Group
+      # group in package object
+      found_packages = PackageGroupRoleRelationship.where(:role_id => roles, :bs_group_id => owner, :db_package_id => Package.where(:db_project_id => projects)).select(:db_package_id).map{ |p| p.db_package_id}
+      # group in project object
+      ProjectGroupRoleRelationship.where(:role_id => roles, :bs_group_id => owner, :db_project_id => Project.where(:id => projects)).each do |prjrel|
+        found_projects << prjrel.db_project_id
+      end
+    else
+      raise "illegal object handed to find_containers"
+    end
+    if devel == true
+      #FIXME add devel packages, but how do recursive lookup fast in SQL?
+    end
+    found_packages.uniq!
+
+    maintainers=[]
+
+    found_projects.each do |id|
+      prj = Project.find_by_id(id)
+      maintainers << { :rootproject => self.name, :project => prj.name }
+    end
+    found_packages.each do |id|
+      pkg = Package.find_by_id(id)
+      maintainers << { :rootproject => self.name, :project => pkg.project.name, :package => pkg.name }
+    end
 
     return maintainers
   end
 
-  def find_assignees(binary_name, limit=1, devel=true, filter=["maintainer","bugowner"])
+  def find_assignees(binary_name, limit=1, devel=true, filter=["maintainer","bugowner"], webui_mode=false)
+    instances_without_definition=[]
     maintainers=[]
     pkg=nil
     projects=self.expand_all_projects
@@ -1431,7 +1469,12 @@ class Project < ActiveRecord::Base
         # the "" means any matching relationships will get taken
         m, limit, already_checked = lookup_package_owner(pkg, "", limit, devel, filter, deepest, already_checked)
 
-        next unless m
+        unless m
+          # collect all no matched entries
+          m = { :rootproject => self.name, :project => pkg.project.name, :package => pkg.name, :filter => filter }
+          instances_without_definition << m
+          next
+        end
 
         # remember as deepest candidate
         if deepest == true
@@ -1439,12 +1482,14 @@ class Project < ActiveRecord::Base
           next
         end
 
-        # add entry
+        # add matching entry
         maintainers << m
         limit = limit - 1
         return maintainers if limit < 1 and not match_all
       end
     end
+
+    return instances_without_definition if webui_mode and maintainers.length < 1
 
     maintainers << deepest_match if deepest_match
 
@@ -1594,7 +1639,7 @@ class Project < ActiveRecord::Base
     return false unless name.kind_of? String
     # this length check is duplicated but useful for other uses for this function
     return false if name.length > 200 || name.blank?
-    return false if name =~ %r{[\/\000-\037]}
+    return false if name =~ %r{[ \/\000-\037]}
     return false if name =~ %r{^[_\.]} 
     return true
   end
