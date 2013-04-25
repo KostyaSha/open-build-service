@@ -173,7 +173,7 @@ class PersonController < ApplicationController
     realname = xml.elements["/unregisteredperson/realname"].text
     email = xml.elements["/unregisteredperson/email"].text
     password = xml.elements["/unregisteredperson/password"].text
-    note = xml.elements["/unregisteredperson/note"].text
+    note = xml.elements["/unregisteredperson/note"].text if xml.elements["/unregisteredperson/note"]
     status = "confirmed"
 
     unless @http_user and @http_user.is_admin?

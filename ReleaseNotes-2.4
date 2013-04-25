@@ -110,6 +110,8 @@ Features
 
  * Efficient transport of product build results from worker to backend.
 
+ * Secure Boot signing support
+
  * aarch64 architecture added (aka armv8 or arm64)
 
  * New generic "emulator" virtualization support. Can be used to build inside
@@ -119,7 +121,12 @@ Features
 
  * Asynchronus mode for handling interconnects is available. This will avoid
    scheduler hangups with slow or broken network to a remote instance.
-   Enable this via
+   Enable this via 
+
+       our $sched_asyncmode = 1;
+
+   in BSConfig.pm file. It is the default for new OBS installations.
+      
 
 Deprecated:
 ===========

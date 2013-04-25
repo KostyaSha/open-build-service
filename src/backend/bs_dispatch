@@ -122,6 +122,9 @@ sub getcodemd5 {
 
 my $workerdircache = {};
 my $builddircache = {};
+my $workercode;
+my $buildcode;
+my $lastcodechecktime;
 
 my %badhost;
 my %newestsrcchange;
@@ -156,8 +159,12 @@ sub assignjob {
   my $jobid = Digest::MD5::md5_hex($infoxml);
   my $info = XMLin($BSXML::buildinfo, $infoxml);
 
-  my $workercode = getcodemd5('worker', $workerdircache);
-  my $buildcode = getcodemd5('build', $builddircache);
+  my $now = time();
+  if (!$lastcodechecktime || $now - $lastcodechecktime > 20 || $now - $lastcodechecktime < 0) {
+    $workercode = getcodemd5('worker', $workerdircache);
+    $buildcode = getcodemd5('build', $builddircache);
+    $lastcodechecktime = $now;
+  }
 
   # get the worker data
   my $worker = readxml("$workersdir/idle/$idlename", $BSXML::worker, 1);
@@ -994,5 +1001,20 @@ while (1) {
     print "restarting...\n";
     exec($0);
     die("$0: $!\n");
+  }
+  if (-e "$rundir/bs_dispatch.dumpstate") {
+    my $state = {
+      'infocache' => \%infocache,
+      'badhost' => \%badhost,
+      'newestsrcchange' => \%newestsrcchange,
+    };
+    BSUtil::store("$rundir/bs_dispatch.state.new", "$rundir/bs_dispatch.state", $state);
+    unlink("$rundir/bs_dispatch.dumpstate");
+    print "dumped state to $rundir/bs_dispatch.state ...\n";
+  }
+  if (-e "$rundir/bs_dispatch.dropbadhosts") {
+    unlink("$rundir/bs_dispatch.dropbadhosts");
+    print "removing all badhost entries...\n";
+    %badhost = ();
   }
 }
