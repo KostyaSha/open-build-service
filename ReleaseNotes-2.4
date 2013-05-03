@@ -6,7 +6,7 @@
 Please read the README.SETUP file for initial installation
 instructions or use the OBS Appliance from
 
-  http://en.opensuse.org/Build_Service/OBS-Appliance
+  http://openbuildservice.org/download/
 
 There is also an install medium with installs OBS on hard disc now.
 
@@ -29,6 +29,15 @@ Changes on purpose:
 ===================
 
  * Migration to Ruby 1.9 and Rails 3.2
+
+ * More database constraints have been introduced to avoid inconsistent databases.
+   As a result this may cause problems during update if the database is already
+   inconsistent. Please use the script check_database script to fix these
+   kind of issues:
+      # cd /srv/www/obs/api
+      # RAILS_ENV=production ./script/check_database
+
+   It may return a number of SQL commands to make the database consistend again.
 
  * request database got moved from backend to the api. Directly
    after update all requests seem to have vanished, but a delayed

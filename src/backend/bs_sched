@@ -89,9 +89,6 @@ my $remotecache = "$BSConfig::bsdir/remotecache";
 
 if (@ARGV && $ARGV[0] eq '--testmode') {
   $testmode = 1;
-  # for now
-  $asyncmode = 0;
-  $startupmode = 0;
   shift @ARGV;
 }
 if (@ARGV && ($ARGV[0] eq '--exit' || $ARGV[0] eq '--stop')) {
@@ -812,13 +809,13 @@ sub checkroles {
   my @oroles;
   if (defined($opackid)) {
     my $pdata = ($oproj->{'package'} || {})->{$opackid} || {};
-    push @roles, @{$pdata->{'person'} || []}, @{$pdata->{'group'} || []};
+    push @oroles, @{$pdata->{'person'} || []}, @{$pdata->{'group'} || []};
   }
-  push @roles, @{$oproj->{'person'} || []}, @{$oproj->{'group'} || []};
+  push @oroles, @{$oproj->{'person'} || []}, @{$oproj->{'group'} || []};
   while ($oprojid =~ /^(.+):/) {
     $oprojid = $1;
     $oproj = $projpacks->{$oprojid} || {};
-    push @roles, @{$oproj->{'person'} || []}, @{$oproj->{'group'} || []};
+    push @oroles, @{$oproj->{'person'} || []}, @{$oproj->{'group'} || []};
   }
   # make sure every user from oprojid can also access projid
   # XXX: check type and roles
@@ -827,11 +824,10 @@ sub checkroles {
     my @rx; 
     if (exists $r->{'userid'}) {
       push @rx, grep {exists($_->{'userid'}) && $_->{'userid'} eq $r->{'userid'}} @roles;
-    }    
-    if (exists $r->{'groupid'}) {
+    } elsif (exists $r->{'groupid'}) {
       push @rx, grep {exists($_->{'groupid'}) && $_->{'groupid'} eq $r->{'groupid'}} @roles;
-    }    
-    return 0  unless grep {$_->{'role'} eq $r->{'role'} || $_->{'role'} eq 'maintainer'} @rx;
+    }
+    return 0 unless grep {$_->{'role'} eq $r->{'role'} || $_->{'role'} eq 'maintainer'} @rx;
   }
   return 1;
 }
@@ -5839,6 +5835,7 @@ sub event_uploadbuild_delay {
   my $projid = $info->{'project'};
   my $packid = $info->{'package'};
   return 0 unless defined($projid) && defined($packid);
+  return 1 if $iswaiting{$projid};	# delay if getprojpack in progress
   if (grep {!defined($_) || $_ eq $packid} (@{$fetchprojpacks->{$projid} || []}, @{$delayedfetchprojpacks->{$projid} || []})) {
     push @{$fetchprojpacks->{$projid}}, $packid;
     # remove package from delayedfetchprojpacks to prevent looping
@@ -6627,6 +6624,7 @@ my $gotevent = 1;
 $gotevent = 0 if $testprojid;
 
 my $lastschedinfo = 0;
+my $initialstartup = 1;
 
 # create global context
 my $gctx = {
@@ -6796,6 +6794,12 @@ NEXTPRP:
 	    $ectx->{'fullcache'} = {} if $events[0] && $events[0]->{'type'} eq 'built';
 	  }
 
+          # ignore exit events on initial startup, they are most likely left overs...
+          if ($initialstartup && ($ev->{'type'} eq 'exit' || $ev->{'type'} eq 'exitcomplete')) {
+	    print "WARNING: there was an exit event, but we ignore it directly after starting the scheduler.";
+            next;
+          }
+
 	  my $evhandler = $event_handlers{$ev->{'type'}};
 	  if ($evhandler) {
 	    $evhandler->($ectx, $ev);
@@ -6822,6 +6826,8 @@ NEXTPRP:
       }
       next;
     }
+    # done with first time event processing
+    $initialstartup = undef;
 
     # mark all indirect affected repos dirty
     for my $prp (keys %changed_dirty) {
@@ -6892,7 +6898,7 @@ NEXTPRP:
     }
 
     if (!defined($prp)) {
-      if ($testmode) {
+      if ($testmode && !%iswaiting) {
 	print "Test mode, all sources and events processed, exiting...\n";
 	exit(0);
       }
