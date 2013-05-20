@@ -3267,6 +3267,7 @@ sub convertpackagebinarylist {
     $rpackstatus->{$pkg} = $binaryversionlist->{'code'} if $binaryversionlist->{'code'};
   }
   my $cachemd5 = Digest::MD5::md5_hex($prpa);
+  substr($cachemd5, 2, 0, '/');
   mkdir_p("$remotecache/".substr($cachemd5, 0, 2));
   BSUtil::store("$remotecache/$cachemd5.bininfo.new$$", "$remotecache/$cachemd5.bininfo", $gbininfo);
 
@@ -5983,6 +5984,7 @@ sub event_scanprjbinaries {
     unlink("$reporoot/$prp/$myarch/:bininfo.merge");
     print "reading project binary state of repository $projid/$repoid\n";
     read_gbininfo("$reporoot/$prp/$myarch");
+    $changed_high->{$prp} = 1;
   }
 }
 

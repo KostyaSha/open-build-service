@@ -1,0 +1,41 @@
+#
+# openSUSE Build Service 2.4.2
+#
+
+Updaters from any OBS 2.4 release can just ugrade the packages
+and restart all services. Updaters from former releases should
+read the README.UPDATERS file.
+
+Note: we fixed also an update problem of the ruby package
+
+Feature backports:
+==================
+
+* none
+
+Changes:
+========
+
+* build: vminit can now be installed for multiple architectures in parallel on
+         OBS server.
+* build: debian builds call linitian now if installed
+* build: Arch Linux: support new pacman tool syntax
+* build: support kiwi installation medias with new kiwi versions
+* api: Interconnect supports to use credentials as part of the remoteurl.
+       Note: the url must not use /public suffix in that case
+* webui: change password is allowed by default in config file now
+* webui: Disable browser autocomplete on sign up form
+
+Bugfixes:
+=========
+
+* build: fixed regression using build host rpm instead of the version from chroot
+* build: fixed repository priority ordering, when only some repos have a priority
+         and kiwi appliances get build
+* build: support kiwi appliances using multiple <packages> sections in config file
+* build: rpm packages get installed again without fsync which speeds up the installation
+* build: fix qemu-binfmt registration in chroot builds
+* backend: fixed binary rpm cache handling for image building via interconnect
+* webui: fixed change password dialog
+* webui: fixed display of groups and globalrole
+
