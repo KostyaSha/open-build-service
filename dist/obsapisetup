@@ -3,27 +3,6 @@
 #
 # Author: adrian@suse.de
 #
-# /etc/init.d/obsapisetup
-#   and its symbolic  link
-# /usr/sbin/rcobsapisetup
-#
-### BEGIN INIT INFO
-# Provides:          obsapisetup
-# Start-Before:      apache2
-# Should-Start:      obsstoragesetup
-# Should-Stop:       $none
-# Required-Start:    mysql
-# Required-Stop:     $null
-# Default-Start:     3 5
-# Default-Stop:      0 1 2 4 6
-# Description:       Initialize and update api database, only used in OBS Appliance
-### END INIT INFO
-
-. /etc/rc.status
-
-# Determine the base and follow a runlevel link name.
-base=${0##*/}
-link=${base#*[SK][0-9][0-9]}
 
 apidir=/srv/www/obs/api
 webuidir=/srv/www/obs/webui
@@ -49,10 +28,8 @@ else
 backenddir="$OBS_BASE_DIR"
 fi
 
+
 FQHOSTNAME=`hostname -f `
-if type -p ec2-public-hostname; then
-  FQHOSTNAME=`ec2-public-hostname`
-fi
 
 if [ "$?" != "0" ]; then
   # Fallback to IP of the VM/host
@@ -72,15 +49,10 @@ if [ $? -gt 0 ]; then
    echo "Can't export datadir variable from /etc/my.cnf"
    exit 1
 fi
-export $(grep '^datadir=' /etc/my.cnf)
+export $(grep '^datadir=' /etc/my.cnf) 
 
-rc_reset
 case "$1" in
 	start)
-                if [ ! -d $backenddir/MySQL ]; then
-			mkdir -p $backenddir/MySQL
-		fi
-
 		# If we've proper hostname resolution all is fine. But if
 		# there's no proper hostname resolution, adapt BSConfig.pm et al.
 		### In case of the appliance, we never know where we boot up !
@@ -133,7 +105,7 @@ case "$1" in
                 sed -i -e /webui_url:/d -e /webui_host:/d -e /read_only_hosts:/d -e /allow_anonymous:/d \
 		    /srv/www/obs/api/config/options.yml
 		OBSVERSION=`rpm -q --qf '%{VERSION}' obs-server`
-		OS=`head -n 1 /etc/SuSE-release`
+		OS=`head -n 1 /etc/os-release`
                 RUN_INITIAL_SETUP=""
                 if [ ! -e "$datadir"/api_production ]; then
 			echo "Initialize MySQL databases (first time only)"
@@ -263,31 +235,5 @@ EOF
 			echo '** is required!                             **' >> /etc/issue
 			echo '**********************************************' >> /etc/issue
 		fi
-		rc_status -v
-	;;
-	stop)
-                # nothing to do
-		rc_status -v
-	;;
-	restart)
-                # nothing to do
-		rc_status
-	;;
-	try-restart)
-                # nothing to do
-		rc_status
-	;;
-	reload)
-                # nothing to do
-		rc_status
-	;;
-	status)
-		# nothing to do
-		rc_status -v
-	;;
-	*)
-		echo "Usage: $0 {start|stop|status|try-restart|restart|reload}"
-		exit 1
 	;;
 esac
-rc_exit

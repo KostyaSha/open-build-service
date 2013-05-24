@@ -3,28 +3,8 @@
 #
 # Author: adrian@suse.de
 #
-# /etc/init.d/obsscheduler
-#   and its symbolic  link
-# /usr/sbin/rcobsscheduler
-#
-### BEGIN INIT INFO
-# Provides:          obsscheduler
-# Required-Start:    $time $syslog obsrepserver
-# Should-Start:      obssrcserver $network $remote_fs obsapisetup
-# Should-Stop:       $none
-# Required-Stop:     $null
-# Default-Start:     3 5
-# Default-Stop:      0 1 2 4 6
-# Description:       open build service job scheduler
-### END INIT INFO
-
-. /etc/rc.status
 
 . /etc/sysconfig/obs-server
-
-# Determine the base and follow a runlevel link name.
-base=${0##*/}
-link=${base#*[SK][0-9][0-9]}
 
 if [ -z "$OBS_RUN_DIR" ]; then
         OBS_RUN_DIR="/srv/obs/run"
@@ -42,7 +22,6 @@ fi
 rundir="$OBS_RUN_DIR"
 logdir="$OBS_LOG_DIR"
 
-rc_reset
 case "$1" in
 	start)
 		echo -n "Initializing obsscheduler"
@@ -55,7 +34,6 @@ case "$1" in
 		for i in $OBS_SCHEDULER_ARCHITECTURES; do
 		        ./bs_sched $i >> "$logdir"/scheduler_$i.log 2>&1 &
 		done
-		rc_status -v
 	;;
 	stop|shutdown)
 		echo -n "Shutting down obsscheduler"
@@ -72,34 +50,5 @@ case "$1" in
 				killall bs_sched
 			fi
 		fi
-		rc_status -v
-	;;
-	restart)
-		$0 stop	
-		$0 start
-		rc_status
-	;;
-	try-restart)
-		$0 status
-		if test $? = 0; then
-			$0 restart
-		else
-			rc_reset        # Not running is not a failure.
-		fi
-		# Remember status and be quiet
-		rc_status
-	;;
-	reload)
-	;;
-	status)
-		echo -n "Checking for obsscheduler: "
-                # FIXME: needs proper checking for all invoked schedulers
-		checkproc bs_sched
-		rc_status -v
-	;;
-	*)
-		echo "Usage: $0 {start|stop|status|try-restart|restart|reload}"
-		exit 1
 	;;
 esac
-rc_exit

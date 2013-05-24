@@ -3,23 +3,6 @@
 #
 # Author: adrian@suse.de
 #
-# /etc/init.d/obsstoragesetup
-#   and its symbolic link
-# /usr/sbin/rcobsstoragesetup
-#
-### BEGIN INIT INFO
-# Provides:          obsstoragesetup
-# Start-Before:      mysql sshd
-# Should-Start:      xendomains haveged
-# Should-Stop:       $none
-# Required-Start:    $network
-# Required-Stop:     $null
-# Default-Start:     3 5
-# Default-Stop:      0 1 2 4 6
-# Description:       Finds the storage device to be used for OBS server and/or worker
-### END INIT INFO
-
-. /etc/rc.status
 
 # package or appliance defaults
 if [ -e /etc/sysconfig/obs-server ]; then
@@ -36,10 +19,6 @@ if [ "$OBS_STORAGE_AUTOSETUP" != "yes" ]; then
    exit 0
 fi
 
-# Determine the base and follow a runlevel link name.
-base=${0##*/}
-link=${base#*[SK][0-9][0-9]}
-
 if [ -z "$OBS_BASE_DIR" ]; then
 backenddir=/srv/obs
 else
@@ -50,7 +29,6 @@ if [ -z "$OBS_WORKER_DIRECTORY" ]; then
 	OBS_WORKER_DIRECTORY="/var/cache/obs/worker"
 fi
 
-rc_reset
 case "$1" in
 	start)
 
@@ -84,7 +62,7 @@ case "$1" in
 		# support usage of lvm on md devices
                 if [ -x /sbin/mdadm ]; then
 			/sbin/mdadm --assemble --scan
-			/etc/init.d/boot.lvm start
+			systemctl start lvm
 		fi
 
 		if [ "$OBS_SETUP_WORKER_PARTITIONS" = "take_all" ]; then
@@ -441,31 +419,5 @@ EOF
 			/tmp/osbworkerscript.$$
 			rm /tmp/osbworkerscript.$$
 		fi
-		rc_status -v
-	;;
-	stop)
-                # nothing to do
-		rc_status -v
-	;;
-	restart)
-                # nothing to do
-		rc_status
-	;;
-	try-restart)
-                # nothing to do
-		rc_status
-	;;
-	reload)
-                # nothing to do
-		rc_status
-	;;
-	status)
-		# nothing to do
-		rc_status -v
-	;;
-	*)
-		echo "Usage: $0 {start|stop|status|try-restart|restart|reload}"
-		exit 1
 	;;
 esac
-rc_exit

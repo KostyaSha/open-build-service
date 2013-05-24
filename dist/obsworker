@@ -3,23 +3,6 @@
 #
 # Author: adrian@suse.de
 #
-# /etc/init.d/obsworker
-#   and its symbolic  link
-# /usr/sbin/rcobsworker
-#
-### BEGIN INIT INFO
-# Provides:          obsworker
-# Required-Start:    $time $network $syslog
-# Required-Stop:     $time $network $syslog
-# Should-Start:      $remote_fs obsstoragesetup obssrcserver obsrepserver xendomains
-# Should-Stop:       $none
-# Default-Start:     3 5
-# Default-Stop:      0 1 2 4 6
-# Description:       Open Build Service worker
-### END INIT INFO
-
-. /etc/rc.status
-
 # Is the worker running on Fedora >= 17 ?
 # It lacks the complete path to build other distros then
 bash_bin=`which bash`
@@ -39,9 +22,6 @@ if test -e /etc/sysconfig/obs-worker; then
 . /etc/sysconfig/obs-worker
 fi
 
-# Determine the base and follow a runlevel link name.
-base=${0##*/}
-link=${base#*[SK][0-9][0-9]}
 
 # Preconfigured by obsstoragesetup runlevel setup script
 if [ -f /etc/buildhost.config ];then
@@ -224,8 +204,8 @@ case "$1" in
             NUM=`ls -d /sys/devices/system/cpu/cpu[0-9]* | wc -l`
         fi
 	if [ "--zvm" == "$vmopt" ]; then
-	    check_vmcp || rc_status -v
-	    create_initrd $OBS_VM_KERNEL $OBS_VM_INITRD || rc_status -v
+	    check_vmcp || true
+	    create_initrd $OBS_VM_KERNEL $OBS_VM_INITRD || true
 	fi
 	if [ -n "$OBS_WORKER_INSTANCE_NAMES" ]; then
 	    WORKERS=($OBS_WORKER_INSTANCE_NAMES)
@@ -261,6 +241,9 @@ case "$1" in
         mkdir -p "$workerbootdir"
         pushd "$workerbootdir" > /dev/null
         curl -s "$WORKER_CODE"/getworkercode | cpio --quiet --extract 
+	if [ $? -gt 0 ]; then
+		echo "Can't fetch code" && exit 1
+	fi
         ln -s . XML 
         chmod 755 bs_worker
         popd > /dev/null
@@ -341,35 +324,22 @@ case "$1" in
         killall bs_worker 2>/dev/null
         sleep 2
         killall -s 9 bs_worker 2>/dev/null
-        rc_status -v
     ;;
     restart)
         ## If first returns OK call the second, if first or
         ## second command fails, set echo return value.
         $0 stop
         $0 start
-        rc_status
     ;;
-    try-restart)
-        $0 status
-        if test $? = 0; then
-            $0 restart
-        else
-            rc_reset        # Not running is not a failure.
-        fi
-        # Remember status and be quiet
-        rc_status
-    ;;
+  #  try-restart)
+  #      $0 status
+  #      if test $? = 0; then
+  #          $0 restart
+  #  ;;
     reload)
-    ;;
-    status)
-        echo -n "Checking for obsworker: "
-        checkproc bs_worker
-        rc_status -v
     ;;
     *)
         echo "Usage: $0 {start|stop|status|try-restart|restart|reload}"
         exit 1
     ;;
 esac
-rc_exit
