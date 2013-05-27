@@ -1008,7 +1008,7 @@ repodata_addbin(Repodata *data, char *prefix, char *s, int sl, char *sid)
 
   path = solv_dupjoin(prefix, "/", s);
   if (sl >= 4 && !strcmp(s + sl - 4, ".rpm"))
-    p = repo_add_rpm(data->repo, (const char *)path, REPO_REUSE_REPODATA|REPO_NO_INTERNALIZE|REPO_NO_LOCATION|RPM_ADD_WITH_PKGID|RPM_ADD_NO_FILELIST|RPM_ADD_NO_RPMLIBREQS);
+    p = repo_add_rpm(data->repo, (const char *)path, REPO_REUSE_REPODATA|REPO_NO_INTERNALIZE|REPO_NO_LOCATION|RPM_ADD_WITH_PKGID|RPM_ADD_NO_RPMLIBREQS);
   else if (sl >= 4 && !strcmp(s + sl - 4, ".deb"))
     p = repo_add_deb(data->repo, (const char *)path, REPO_REUSE_REPODATA|REPO_NO_INTERNALIZE|REPO_NO_LOCATION|DEBS_ADD_WITH_PKGID);
 #ifdef ARCH_ADD_WITH_PKGID
@@ -1711,6 +1711,7 @@ createwhatprovides(BSSolv::pool pool)
 	  }
 	pool->considered = solv_calloc(sizeof(Map), 1);
 	create_considered(pool, 0, pool->considered);
+	pool_addfileprovides(pool);
 	pool_createwhatprovides(pool);
 
 void
