@@ -1,10 +1,14 @@
 <% @pagetitle = "Edit User Data" %>
+<% @crumb_list = [] %>
+<% @crumb_list << link_to('Configuration', :controller => 'configuration', :action => :index) -%>
+<% @crumb_list << link_to('User Management', :controller => 'configuration', :action => :users) -%>
+<% @crumb_list << @pagetitle -%>
 
 <h2>Editing User Data for User <%= @displayed_user.login %></h2>
 
   <%= form_tag(:action => 'save') do %>
     <p>
-     <input id="user" name="user" type="hidden" value="<%= @displayed_user.login %>" />     
+     <input id="user" name="user" type="hidden" value="<%= @displayed_user.login %>" />
      <%= label_tag :realname, 'Name:' %><br/>
      <%= text_field_tag :realname, @displayed_user.realname %>     
     </p>
@@ -13,13 +17,13 @@
      <%= text_field_tag :email, @displayed_user.email %>
     </p>
     <p>
-    <% @roles.each do |r| %>
-      <%= label_tag "globalrole_#{r}", "#{r}" %>
-      <% if r.to_s == @displayed_user.globalrole.to_s %>
-        <% select = true %>
-      <% end %>
-      <%= radio_button_tag :globalrole, r, select %>
+    <%= label_tag :globalrole, 'Admin:' %>
+    <% if @displayed_user.globalrole and @displayed_user.globalrole.include?('Admin') %>
+      <% checked = 'checked="checked"' %>
+    <% else %>
+      <% checked = "" %>
     <% end %>
+      <input type="checkbox" name="globalrole" value="Admin" <%= checked.html_safe if checked %> />
     </p>
     <p>
     <% @states.each do |s| %>

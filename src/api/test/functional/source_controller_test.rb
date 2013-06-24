@@ -2,8 +2,13 @@
 require File.expand_path(File.dirname(__FILE__) + "/..") + "/test_helper"
 require 'source_controller'
 
-class SourceControllerTest < ActionController::IntegrationTest 
+class SourceControllerTest < ActionDispatch::IntegrationTest 
   fixtures :all
+
+  def setup
+    super
+    wait_for_scheduler_start
+  end
   
   def test_get_projectlist
     prepare_request_with_user "tom", "thunder"
@@ -419,6 +424,57 @@ end
     # maintainer
     prepare_request_with_user "sourceaccess_homer", "homer"
     do_change_project_meta_test(prj, resp1, resp2, aresp, match)
+  end
+
+  def test_create_and_remove_download_on_demand_definitions
+    build_meta="<project name='TEMPORARY:build'><title></title><description/>
+                      <download arch='x86_64' baseurl='http://somewhere' mtype='rpm-md' metafile='somefile'/>
+                      <repository name='repo1'>
+                        <path project='BaseDistro' repository='BaseDistro_repo'/>
+                        <arch>x86_64</arch>
+                      </repository>
+                   </project>"
+
+    # create them
+    prepare_request_with_user "king", "sunflower"
+    put url_for(:controller => :source, :action => :project_meta, :project => "TEMPORARY:build"), build_meta
+    assert_response :success
+    get "/source/TEMPORARY:build/_meta"
+    assert_response :success
+    assert_xml_tag :parent => {:tag => "project"},
+                   :tag => 'download', :attributes => {:arch => 'x86_64', :baseurl => 'http://somewhere', :mtype => "rpm-md", :metafile => "somefile"}
+
+    # change download definition
+    build_meta="<project name='TEMPORARY:build'><title></title><description/>
+                      <download arch='x86_64' baseurl='http://somewhereelse' mtype='yast' metafile='someotherfile'/>
+                      <repository name='repo1'>
+                        <path project='BaseDistro' repository='BaseDistro_repo'/>
+                        <arch>x86_64</arch>
+                      </repository>
+                   </project>"
+    put url_for(:controller => :source, :action => :project_meta, :project => "TEMPORARY:build"), build_meta
+    assert_response :success
+    get "/source/TEMPORARY:build/_meta"
+    assert_response :success
+    assert_xml_tag :parent => {:tag => "project"},
+                   :tag => 'download', :attributes => {:arch => 'x86_64', :baseurl => 'http://somewhereelse', :mtype => "yast", :metafile => "someotherfile"}
+
+    # delete download definition
+    build_meta="<project name='TEMPORARY:build'><title></title><description/>
+                      <repository name='repo1'>
+                        <path project='BaseDistro' repository='BaseDistro_repo'/>
+                        <arch>x86_64</arch>
+                      </repository>
+                   </project>"
+    put url_for(:controller => :source, :action => :project_meta, :project => "TEMPORARY:build"), build_meta
+    assert_response :success
+    get "/source/TEMPORARY:build/_meta"
+    assert_response :success
+    assert_no_xml_tag :tag => "download"
+
+    # cleanup
+    delete "/source/TEMPORARY:build"
+    assert_response :success
   end
 
   def test_create_and_remove_release_targets
@@ -1358,10 +1414,10 @@ end
                                assertresp3, asserteq3, assertresp4)
     # maintainer
     prepare_request_with_user "hidden_homer", "homer"
-    asserttag1={:tag => 'directory', :attributes => { :srcmd5 => "47a5fb1c73c75bb252283e2ad1110182" }}
+    asserttag1={:tag => 'directory', :attributes => { :srcmd5 => "ee3a023192742ef3c4b2e3ea1cabec4f" }}
     assertresp2=:success
     assertselect2="revision > srcmd5"
-    assertselect2rev='16bbde7f26e318a5c893c182f7a3d433'
+    assertselect2rev='c123834bc133a23e3cfee9fb299ae6c5'
     assertresp3=:success
     asserteq3=true
     assertresp4=:success
@@ -1396,10 +1452,10 @@ end
                                assertresp3, asserteq3, assertresp4)
     # maintainer
     prepare_request_with_user "sourceaccess_homer", "homer"
-    asserttag1={:tag => 'directory', :attributes => { :srcmd5 => "47a5fb1c73c75bb252283e2ad1110182" }}
+    asserttag1={:tag => 'directory', :attributes => { :srcmd5 => "ee3a023192742ef3c4b2e3ea1cabec4f" }}
     assertresp2=:success
     assertselect2="revision > srcmd5"
-    assertselect2rev='16bbde7f26e318a5c893c182f7a3d433'
+    assertselect2rev='c123834bc133a23e3cfee9fb299ae6c5'
     assertresp3=:success
     asserteq3=true
     assertresp4=:success
@@ -1914,6 +1970,164 @@ end
     assert_response :success
   end
 
+  def test_release_project
+    # define release target
+    prepare_request_with_user "Iggy", "asdfasdf"
+    # create and define manual release target
+    put "/source/home:Iggy:RT/_meta", "<project name='home:Iggy:RT'> <title/> <description/> 
+          <repository name='rt'>
+            <arch>i586</arch>
+            <arch>x86_64</arch>
+          </repository>
+        </project>"
+    assert_response :success
+
+    # workaround of testsuite breakage, database object gets restored during
+    # request controller run, but backend part not
+    get "/source/home:Iggy/ToBeDeletedTestPack/_meta"
+    assert_response :success
+    put "/source/home:Iggy/ToBeDeletedTestPack/_meta", @response.body
+    assert_response :success
+
+    run_scheduler("i586")
+    run_scheduler("x86_64")
+
+    get "/source/home:Iggy/_meta"
+    assert_response :success
+    orig_project_meta = @response.body
+    doc = REXML::Document.new( @response.body )
+    rt = doc.elements["/project/repository'"].add_element "releasetarget"
+    rt.add_attribute REXML::Attribute.new('project', 'home:Iggy:RT')
+    rt.add_attribute REXML::Attribute.new('repository', 'rt')
+    put "/source/home:Iggy/_meta", doc.to_s
+    assert_response :success
+
+    # try to release with incorrect trigger
+    post "/source/home:Iggy?cmd=release", nil
+    assert_response 400
+    assert_match(/Trigger is not set to manual in repository home:Iggy\/10.2/, @response.body)
+
+    # add correct trigger
+    rt.add_attribute REXML::Attribute.new('trigger', 'manual')
+    put "/source/home:Iggy/_meta", doc.to_s
+    assert_response :success
+
+    # this user is not allowed
+    prepare_request_with_user "adrian", "so_alone"
+    post "/source/home:Iggy?cmd=release", nil
+    assert_response 403
+    assert_xml_tag :tag => "status", :attributes => { :code => "cmd_execution_no_permission" }
+
+    # release for real
+    prepare_request_with_user "Iggy", "asdfasdf"
+    post "/source/home:Iggy?cmd=release", nil
+    assert_response :success
+    assert_xml_tag :tag => "status", :attributes => { :code => "invoked" }
+    # just invoked, it will not get executed in test suite
+    # so try it again without delay
+    post "/source/home:Iggy?cmd=release&nodelay=1", nil
+    assert_response :success
+    assert_xml_tag :tag => "status", :attributes => { :code => "ok" }
+
+    # process events
+    run_scheduler("i586")
+
+    # verify result
+    get "/source/home:Iggy:RT"
+    assert_response :success
+    assert_xml_tag :tag => "entry", :attributes => { :name => "TestPack" }
+
+    # compare source with target repo
+    get "/build/home:Iggy/10.2/i586/TestPack/"
+    assert_response :success
+    assert_xml_tag :tag => "binarylist", :children => { :count => 4 }
+
+    get "/build/home:Iggy:RT/rt/i586/TestPack/"
+    assert_response :success
+    assert_xml_tag :tag => "binarylist", :children => { :count => 4 }
+
+    # cleanup
+    prepare_request_with_user "Iggy", "asdfasdf"
+    put "/source/home:Iggy/_meta", orig_project_meta
+    assert_response :success
+    delete "/source/home:Iggy:RT"
+    assert_response :success
+  end
+
+  def test_release_package
+    # define release target
+    prepare_request_with_user "king", "sunflower"
+
+    prepare_request_with_user "Iggy", "asdfasdf"
+    # create and define manual release target
+    put "/source/home:Iggy:RT/_meta", "<project name='home:Iggy:RT'> <title/> <description/> 
+          <repository name='rt'>
+            <arch>i586</arch>
+            <arch>x86_64</arch>
+          </repository>
+        </project>"
+    assert_response :success
+
+    run_scheduler("i586")
+    run_scheduler("x86_64")
+
+    get "/source/home:Iggy/_meta"
+    assert_response :success
+    orig_project_meta = @response.body
+    doc = REXML::Document.new( @response.body )
+    rt = doc.elements["/project/repository'"].add_element "releasetarget"
+    rt.add_attribute REXML::Attribute.new('project', 'home:Iggy:RT')
+    rt.add_attribute REXML::Attribute.new('repository', 'rt')
+    put "/source/home:Iggy/_meta", doc.to_s
+    assert_response :success
+
+    # try to release with incorrect trigger
+    post "/source/home:Iggy/TestPack?cmd=release", nil
+    assert_response 400
+    assert_match(/Trigger is not set to manual in repository home:Iggy\/10.2/, @response.body)
+
+    # add correct trigger
+    rt.add_attribute REXML::Attribute.new('trigger', 'manual')
+    put "/source/home:Iggy/_meta", doc.to_s
+    assert_response :success
+
+    # this user is not allowed
+    prepare_request_with_user "adrian", "so_alone"
+    post "/source/home:Iggy/TestPack?cmd=release", nil
+    assert_response 403
+    assert_xml_tag :tag => "status", :attributes => { :code => "cmd_execution_no_permission" }
+
+    # release for real
+    prepare_request_with_user "Iggy", "asdfasdf"
+    post "/source/home:Iggy/TestPack?cmd=release", nil
+    assert_response :success
+    assert_xml_tag :tag => "status", :attributes => { :code => "ok" }
+
+    # process events
+    run_scheduler("i586")
+
+    # verify result
+    get "/source/home:Iggy:RT"
+    assert_response :success
+    assert_xml_tag :tag => "entry", :attributes => { :name => "TestPack" }
+
+    # compare source with target repo
+    get "/build/home:Iggy/10.2/i586/TestPack/"
+    assert_response :success
+    assert_xml_tag :tag => "binarylist", :children => { :count => 4 }
+
+    get "/build/home:Iggy:RT/rt/i586/TestPack/"
+    assert_response :success
+    assert_xml_tag :tag => "binarylist", :children => { :count => 4 }
+
+    # cleanup
+    prepare_request_with_user "Iggy", "asdfasdf"
+    put "/source/home:Iggy/_meta", orig_project_meta
+    assert_response :success
+    delete "/source/home:Iggy:RT"
+    assert_response :success
+  end
+
   def test_copy_package
     # fred has maintainer permissions in this single package of Iggys home
     # this is the osc way
@@ -2342,6 +2556,42 @@ end
 
     prepare_request_with_user "adrian", "so_alone"
     post "/source/kde4/kdelibs", :cmd => :undelete
+    assert_response :success
+  end
+
+  def test_branch_creating_project
+    prepare_request_with_user "fredlibs", "geröllheimer"
+    # ensure he has no home project
+    get "/source/home:fredlibs"
+    assert_response 404
+
+    # Create public project, but api config is changed to make it closed
+    CONFIG['allow_user_to_create_home_project'] = false
+    post "/source/home:Iggy/TestPack", :cmd => :branch, :dryrun => "1" 
+    assert_response :success
+    post "/source/home:Iggy/TestPack", :cmd => :branch
+    assert_response 403
+
+    # create home and try again
+    prepare_request_with_user "king", "sunflower"
+    put "/source/home:fredlibs/_meta", "<project name='home:fredlibs'><title/><description/> <person role='maintainer' userid='fredlibs'/> </project>"
+    assert_response :success
+
+    prepare_request_with_user "fredlibs", "geröllheimer"
+    post "/source/home:Iggy/TestPack", :cmd => :branch
+    assert_response :success
+
+    # cleanup and try again with defaults
+    CONFIG['allow_user_to_create_home_project'] = true
+    delete "/source/home:fredlibs:branches:home:Iggy"
+    assert_response :success
+    delete "/source/home:fredlibs"
+    assert_response :success
+    post "/source/home:Iggy/TestPack", :cmd => :branch
+    assert_response :success
+
+    # final cleanup
+    delete "/source/home:fredlibs:branches:home:Iggy"
     assert_response :success
   end
 
