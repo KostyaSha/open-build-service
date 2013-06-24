@@ -414,6 +414,7 @@ module ActiveXML
         http = Net::HTTP.new(uri.host, uri.port)
       end
       http.use_ssl = (uri.scheme == 'https')
+      http.verify_mode = OpenSSL::SSL::VERIFY_NONE if uri.scheme == "https"
       begin
         http.start
         response = http.get uri.request_uri
