@@ -12,6 +12,9 @@ fi
 
 if test -e /etc/sysconfig/proxy; then
   . /etc/sysconfig/proxy
+  export http_proxy="$HTTP_PROXY"
+  export HTTPS_PROXY
+  export NO_PROXY
 fi
 if test -e /etc/sysconfig/obs-server; then
   # optional on workers
@@ -186,7 +189,6 @@ EOF
         fi
 }
 
-rc_reset
 case "$1" in
     start)
         # reset screenrc
@@ -206,11 +208,11 @@ case "$1" in
 	if [ "--zvm" == "$vmopt" ]; then
 	    check_vmcp || true
 	    create_initrd $OBS_VM_KERNEL $OBS_VM_INITRD || true
+            if [ -n "$OBS_WORKER_INSTANCE_NAMES" ]; then
+                WORKERS=($OBS_WORKER_INSTANCE_NAMES)
+                NUM=${#WORKERS[*]}
+            fi
 	fi
-	if [ -n "$OBS_WORKER_INSTANCE_NAMES" ]; then
-	    WORKERS=($OBS_WORKER_INSTANCE_NAMES)
-	    NUM=${#WORKERS[*]}
-        fi
 
         if [ -n "$OBS_WORKER_OWNER" ]; then
             HOSTOWNER="--owner $OBS_WORKER_OWNER"

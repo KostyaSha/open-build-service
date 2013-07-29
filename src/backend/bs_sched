@@ -398,7 +398,11 @@ sub getconfig {
     next unless defined $c;
     $config .= "\n### from $p\n";
     $config .= "%define _repository $r\n";
-    $c = defined($1) ? $1 : '' if $c =~ /^(.*\n)?\s*macros:[^\n]*\n/si;
+    # get rid of the Macros sections
+    my $s1 = '^\s*macros:\s*$.*?^\s*:macros\s*$';
+    my $s2 = '^\s*macros:\s*$.*\Z';
+    $c =~ s/$s1//gmsi;
+    $c =~ s/$s2//gmsi;
     $config .= $c;
   }
   # it's an error if we have no config at all
@@ -2602,14 +2606,20 @@ sub update_project_meta_resume {
     # update meta failed, do it the hard way...
     my $async = {'_dolink' => $handle->{'_dolink'}, '_changetype' => $handle->{'_changetype'}, '_changelevel' => $handle->{'_changelevel'}};
     get_projpacks($handle->{'_ctx'}, $async, $projid);
-  } else {
+  } elsif ($projpacks->{$projid}) {
     # update meta worked! Now get those packages as well
     my $packids = $handle->{'_packids'};
     if ($packids && @$packids) {
       # fetch those as well
       my $async = {'_dolink' => 1, '_changetype' => 'high', '_changelevel' => 1};
       get_projpacks($handle->{'_ctx'}, $async, $projid, @$packids);
+    } else {
+      xrpc_setchanged($handle, $projid);
     }
+  } else {
+    # project is gone!
+    delete $handle->{'_packids'};
+    get_projpacks_resume($handle, $error, $projpacksin);
   }
 }
 
@@ -2658,11 +2668,14 @@ sub update_project_meta_check {
   # XXX: could be more clever here
   return 0 unless identical($proj->{'repository'}, $oldproj->{'repository'});
 
-  # check macro definitions
-  my $cold = Build::read_config($myarch, split("\n", $oldproj->{'config'} || ''));
-  my $cnew = Build::read_config($myarch, split("\n", $proj->{'config'} || ''));
-  return 0 unless identical($cold->{'macros'}, $cnew->{'macros'});
-  return 0 unless identical($cold->{'type'}, $cnew->{'type'});
+  # check macro definitions and build type for all repositories
+  for my $repoid (map {$_->{'name'}} @{$proj->{'repository'} || []}) {
+    my @mprefix = ("%define _project $projid", "%define _repository $repoid");
+    my $cold = Build::read_config($myarch, @mprefix, split("\n", $oldproj->{'config'} || ''));
+    my $cnew = Build::read_config($myarch, @mprefix, split("\n", $proj->{'config'} || ''));
+    return 0 unless identical($cold->{'macros'}, $cnew->{'macros'});
+    return 0 unless identical($cold->{'type'}, $cnew->{'type'});
+  }
   $projpacks->{$projid} = $proj;
   return 1;
 }
