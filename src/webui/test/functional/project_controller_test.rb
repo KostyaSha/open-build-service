@@ -10,7 +10,7 @@ class ProjectControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "diff is empty" do
-    visit "/package/rdiff?opackage=pack2&oproject=BaseDistro2.0&package=pack2.linked&project=BaseDistro2.0"
+    visit "/package/rdiff/BaseDistro2.0/pack2.linked?opackage=pack2&oproject=BaseDistro2.0"
     find('#content').must_have_text "No source changes!"
   end
 
@@ -210,5 +210,32 @@ class ProjectControllerTest < ActionDispatch::IntegrationTest
     visit project_list_public_path
     find(:id, 'projects_table_length').select('100')
     find(:id, 'project_list').must_have_link 'HiddenProject'
+  end
+
+  test "Iggy adds himself as reviewer" do
+    login_Iggy
+    visit project_users_path(project: "home:Iggy")
+    check("user_reviewer_Iggy")
+    # wait for it to be clickable again before switching pages
+    page.wont_have_xpath('.//input[@id="user_reviewer_Iggy"][@disabled="disabled"]')
+    click_link("advanced_tabs_trigger")
+    click_link "Meta"
+    page.must_have_text '<person userid="Iggy" role="reviewer"/>'
+  end
+
+  test "Iggy removes homer as maintainer" do
+    login_Iggy
+    visit project_users_path(project: "home:Iggy") 
+    uncheck "user_maintainer_hidden_homer"
+    # wait for it to be clickable again before switching pages
+    page.wont_have_xpath('.//input[@id="user_maintainer_hidden_homer"][@disabled="disabled"]')
+    click_link "advanced_tabs_trigger"
+    click_link "Meta"
+    page.wont_have_text '<person userid="homer" role="maintainer"/>'
+  end
+  
+  test "check status" do
+    visit project_status_path(project: "LocalProject")
+    page.must_have_text "Include version updates" # just don't crash
   end
 end

@@ -105,23 +105,21 @@
         # ignore the upstream version if there are already changes pending
         if p['upstream_version'] and sortkey.nil?
           if p['upstream_url']
-            outs << "New upstream version <a href=\"" + p['upstream_url'] + "\">" + p['upstream_version'] + "</a> available"
+            outs << "New upstream version " + link_to(p['upstream_version'], p['upstream_url']) + " available"
           else
-            outs << "New upstream version " + p['upstream_version'] + " available"
+            outs << "New upstream version #{p['upstream_version']} available"
           end
           sortkey = "8-outdated-" + p['name']
         end
         if p['firstfail']
-          outs.unshift(link_to("Fails", :title => p['name'], :controller => :package,
+          outs.unshift(link_to("Fails", :controller => :package,
               :action => :live_build_log, :arch => p['failedarch'], :repository => p['failedrepo'], :project => @project.name, :package => p['name']) +
-              " for #{Integer(Time.now.to_i - p['firstfail']) / 3600 / 24} days:" +
-              (" <span id='".html_safe + valid_xml_id('comment_' + p['name']) + "'>".html_safe +
-              show_status_comment( p['failedcomment'], p['name'], p['firstfail'], comments_to_clear ) + '</span>'.html_safe))
+              " for #{Integer(Time.now.to_i - p['firstfail']) / 3600 / 24} days: " +
+              content_tag(:span, show_status_comment( p['failedcomment'], p['name'], p['firstfail'], comments_to_clear ), id: valid_xml_id('comment_' + p['name'])))
           icon = "error"
           sortkey = '1-fails-%010d-%s' % [ Time.now.to_i - p['firstfail'], p['name'] ]
         else
-          outs << ("<span id='".html_safe + valid_xml_id('comment_' + p['name']) + "'>".html_safe +
-            show_status_comment( p['failedcomment'], p['name'], p['firstfail'], comments_to_clear ) + '</span>'.html_safe)
+          outs << content_tag(:span, show_status_comment( p['failedcomment'], p['name'], p['firstfail'], comments_to_clear ), id: valid_xml_id('comment_' + p['name']))
         end
         if sortkey.nil?
           sortkey = "9-ok-" + p['name']
@@ -131,11 +129,11 @@
           <td class="nowrap">
             <span class="hidden"><%= p['name'] %></span>
             <% if icon == "error" -%>
-              <%= image_tag("exclamation.png", :size => "16x16", :title => "Error" ) %>
+              <%= sprite_tag("exclamation", title: "Error" ) %>
             <% elsif icon == "ok" -%>
-              <%= image_tag("accept.png", :size => "16x16", :title => "Ok" ) %>
+              <%= sprite_tag("accept", title: "Ok" ) %>
             <% else -%>
-              <%= image_tag("information.png", :size => "16x16", :title => "So-so" ) %>
+              <%= sprite_tag("information", title: "So-so" ) %>
             <% end -%>
             <%= link_to p['name'], :controller => :package, :action => :show, :project => @project.name, :package => p['name'] %>
           </td>
@@ -153,12 +151,10 @@
       <% end %>
     </tbody>
   </table>
-  <%= javascript_tag do %>
-    $(document).ready(function() {
+  <% content_for :ready_function do %>
       $('#status_table').dataTable({
         'iDisplayLength': 50,
       });
-    });
   <% end %>
 <% end %>
 

@@ -36,7 +36,7 @@ use XML::Structured ':bytes';
 use POSIX;
 use Fcntl qw(:DEFAULT :flock);
 
-use BSConfig;
+use BSConfiguration;
 use BSRPC ':https';
 use BSUtil;
 use BSFileDB;
@@ -564,6 +564,19 @@ sub add_crossmarker {
   BSUtil::touch($marker);
 }
 
+sub expandkiwipath {
+  my ($info, $prpsearchpath) = @_;
+  my @path;
+  for (@{$info->{'path'} || []}) {
+    if ($_->{'project'} eq '_obsrepositories') {
+      push @path, @{$prpsearchpath || []};
+    } else {
+      push @path, "$_->{'project'}/$_->{'repository'}";
+    }
+  }
+  return @path;
+}
+
 #
 # set_building  - create a new build job
 #
@@ -609,7 +622,6 @@ sub set_building {
   $packtype = 'arch' if $info->{'file'} eq 'PKGBUILD';
   $packtype = 'preinstallimage' if $info->{'file'} eq '_preinstallimage';
 
-  my $searchpath = [];
   my $syspath;
   if ($packtype eq 'kiwi') {
     if ($prpsearchpath) {
@@ -627,8 +639,9 @@ sub set_building {
 	}
       }
     }
-    $prpsearchpath = [ map {"$_->{'project'}/$_->{'repository'}"} @{$info->{'path'} || []} ];
+    $prpsearchpath = [ expandkiwipath($info, $prpsearchpath) ];
   }
+  my $searchpath = [];
   for (@$prpsearchpath) {
     my @pr = split('/', $_, 2);
     if ($remoteprojs{$pr[0]}) {
@@ -741,6 +754,7 @@ sub set_building {
     'path' => $searchpath,
     'needed' => $needed,
   };
+  $binfo->{'disturl'} = "obs://$BSConfig::obsname/$projid/$repoid/$pdata->{'srcmd5'}-$packid";
   $binfo->{'syspath'} = $syspath if $syspath;
   $binfo->{'hostarch'} = $bconf->{'hostarch'} if $bconf->{'hostarch'};
   $binfo->{'constraintsmd5'} = $pdata->{'constraintsmd5'} if $pdata->{'constraintsmd5'};
@@ -998,6 +1012,7 @@ sub createdeltajob {
     'path' => $searchpath,
     'needed' => 0,
   };
+  $binfo->{'disturl'} = "obs://$BSConfig::obsname/$projid/$repoid/$srcmd5-$packid";
   $binfo->{'hostarch'} = $bconf->{'hostarch'} if $bconf->{'hostarch'};
 
   writexml("$myjobsdir/.$job", "$myjobsdir/$job", $binfo, $BSXML::buildinfo);
@@ -2636,7 +2651,7 @@ sub update_project_meta_resume {
       my $async = {'_dolink' => 1, '_changetype' => 'high', '_changelevel' => 1};
       get_projpacks($handle->{'_ctx'}, $async, $projid, @$packids);
     } else {
-      xrpc_setchanged($handle);
+      xrpc_setchanged($handle, $projid);
     }
   } else {
     # project is gone!
@@ -2693,11 +2708,14 @@ sub update_project_meta_check {
   # XXX: could be more clever here
   return 0 unless identical($proj->{'repository'}, $oldproj->{'repository'});
 
-  # check macro definitions
-  my $cold = Build::read_config($myarch, split("\n", $oldproj->{'config'} || ''));
-  my $cnew = Build::read_config($myarch, split("\n", $proj->{'config'} || ''));
-  return 0 unless identical($cold->{'macros'}, $cnew->{'macros'});
-  return 0 unless identical($cold->{'type'}, $cnew->{'type'});
+  # check macro definitions and build type for all repositories
+  for my $repoid (map {$_->{'name'}} @{$proj->{'repository'} || []}) {
+    my @mprefix = ("%define _project $projid", "%define _repository $repoid");
+    my $cold = Build::read_config($myarch, @mprefix, split("\n", $oldproj->{'config'} || ''));
+    my $cnew = Build::read_config($myarch, @mprefix, split("\n", $proj->{'config'} || ''));
+    return 0 unless identical($cold->{'macros'}, $cnew->{'macros'});
+    return 0 unless identical($cold->{'type'}, $cnew->{'type'});
+  }
   $projpacks->{$projid} = $proj;
   return 1;
 }
@@ -3855,9 +3873,9 @@ sub checkkiwiimage {
   my $projid = $ctx->{'project'};
   my $repoid = $ctx->{'repository'};
   my $prp = $ctx->{'prp'};
-  my @aprps = map {"$_->{'project'}/$_->{'repository'}"} @{$info->{'path'} || []};
   my $repo = $ctx->{'repo'};
 
+  my @aprps = expandkiwipath($info, $ctx->{'prpsearchpath'});
   # get config from path
   my $bconf = getconfig($myarch, \@aprps);
   if (!$bconf) {
@@ -3958,7 +3976,7 @@ sub rebuildkiwiimage {
   if (!@{$repo->{'path'} || []}) {
     # repo has no path, use kiwi repositories also for kiwi system setup
     my $prp = "$projid/$repoid";
-    my @aprps = map {"$_->{'project'}/$_->{'repository'}"} @{$info->{'path'} || []};
+    my @aprps = expandkiwipath($info, $ctx->{'prpsearchpath'});
     # setup pool again for kiwi system expansion
     my $pool = BSSolv::pool->new();
     $pool->settype('deb') if $bconf->{'binarytype'} eq 'deb';
@@ -4076,7 +4094,7 @@ sub checkkiwiproduct {
   my %deps = map {$_ => 1} @deps;
   delete $deps{''};
 
-  my @aprps = map {"$_->{'project'}/$_->{'repository'}"} @{$info->{'path'} || []};
+  my @aprps = expandkiwipath($info, $ctx->{'prpsearchpath'});
   my @bprps = @{$ctx->{'prpsearchpath'}};
   my $bconf = $ctx->{'conf'};
 
@@ -4383,7 +4401,7 @@ sub rebuildkiwiproduct {
       }
     }
   }
-  my @aprps = map {"$_->{'project'}/$_->{'repository'}"} @{$info->{'path'} || []};
+  my @aprps = expandkiwipath($info, $ctx->{'prpsearchpath'});
   my $searchpath = [];
   for (@aprps) {
     my @pr = split('/', $_, 2);
@@ -4461,6 +4479,7 @@ sub rebuildkiwiproduct {
     'reason' => $reason->{'explain'},
     'readytime' => $now,
   };
+  $binfo->{'disturl'} = "obs://$BSConfig::obsname/$projid/$repoid/$srcmd5-$packid";
   $binfo->{'syspath'} = $syspath if $syspath;
   $binfo->{'hostarch'} = $bconf->{'hostarch'} if $bconf->{'hostarch'};
   $binfo->{'revtime'} = $pdata->{'revtime'} if $pdata->{'revtime'};
@@ -5694,7 +5713,8 @@ sub setupremotewatcher {
     'proxy' => $proxy,
   };
   my @args;
-  push @args, "obsname=$BSConfig::obsname/$myarch" if $BSConfig::obsname;
+  my $obsname=$BSConfig::obsname;
+  push @args, "obsname=$obsname/$myarch" if $obsname;
   push @args, map {"filter=$_"} @filter;
   push @args, "start=$start" if $start;
   my $ret;

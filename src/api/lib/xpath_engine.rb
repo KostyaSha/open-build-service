@@ -41,24 +41,41 @@ class XpathEngine
           ['LEFT JOIN packages develpackage ON develpackage.id = packages.develpackage_id']},
         'issue/@state' => {:cpart => 'issues.state', :joins => 
           ['LEFT JOIN package_issues ON packages.id = package_issues.db_package_id',
-           'LEFT JOIN issues ON issues.id = package_issues.issue_id']},
-        'issue/@name' => {:cpart => 'issues.name', :joins =>
+           'LEFT JOIN issues ON issues.id = package_issues.issue_id',
+           'LEFT JOIN attribs ON attribs.db_package_id = packages.id',
+           'LEFT JOIN attrib_issues ON attrib_issues.attrib_id = attribs.id',
+           'LEFT JOIN issues AS issues2 ON issues2.id = attrib_issues.issue_id',
+          ]},
+        'issue/@name' => {:cpart => 'issues.name = ? or issues2.name', :double => true, :joins =>
           ['LEFT JOIN package_issues ON packages.id = package_issues.db_package_id',
            'LEFT JOIN issues ON issues.id = package_issues.issue_id',
+           'LEFT JOIN attribs ON attribs.db_package_id = packages.id',
+           'LEFT JOIN attrib_issues ON attrib_issues.attrib_id = attribs.id',
+           'LEFT JOIN issues AS issues2 ON issues2.id = attrib_issues.issue_id',
           ]},
         'issue/@tracker' => {:cpart => 'issue_trackers.name', :joins =>
           ['LEFT JOIN package_issues ON packages.id = package_issues.db_package_id',
-           'LEFT JOIN issue_trackers ON issues.issue_tracker_id = issue_trackers.id'
+           'LEFT JOIN issue_trackers ON issues.issue_tracker_id = issue_trackers.id',
+           'LEFT JOIN attribs ON attribs.db_package_id = packages.id',
+           'LEFT JOIN attrib_issues ON attrib_issues.attrib_id = attribs.id',
+           'LEFT JOIN issue_trackers AS issue_trackers2 ON issues.issue_tracker_id = issue_trackers2.id'
           ]},
         'issue/@change' => {:cpart => 'package_issues.change'},
-        'issue/owner/@email' => {:cpart => 'users.email', :joins => 
+        'issue/owner/@email' => {:cpart => 'users2.email = ? or users.email', :double => 1, :joins => 
           ['LEFT JOIN package_issues ON packages.id = package_issues.db_package_id',
            'LEFT JOIN issues ON issues.id = package_issues.issue_id',
-           'LEFT JOIN users ON users.id = issues.owner_id']},
-        'issue/owner/@login' => {:cpart => 'users.login', :joins => 
+           'LEFT JOIN users ON users.id = issues.owner_id',
+           'LEFT JOIN attribs ON attribs.db_package_id = packages.id',
+           'LEFT JOIN attrib_issues ON attrib_issues.attrib_id = attribs.id',
+           'LEFT JOIN issues2 ON issues2.id = attrib_issues.issue_id',
+           'LEFT JOIN users AS users2 ON users.id = issues2.owner_id']},
+        'issue/owner/@login' => {:cpart => 'users2.login = ? or users.login', :double => 1, :joins => 
           ['LEFT JOIN package_issues ON packages.id = package_issues.db_package_id',
            'LEFT JOIN issues ON issues.id = package_issues.issue_id',
-           'LEFT JOIN users ON users.id = issues.owner_id']},
+           'LEFT JOIN users ON users.id = issues.owner_id',
+           'LEFT JOIN attribs ON attribs.db_package_id = packages.id',
+           'LEFT JOIN attrib_issues ON attrib_issues.attrib_id = attribs.id',
+           'LEFT JOIN users AS users2 ON users2.id = issues.owner_id']},
         'person/@userid' => {:cpart => 'users.login', :joins => 
           ['LEFT JOIN package_user_role_relationships ON packages.id = package_user_role_relationships.db_package_id',
            'LEFT JOIN users ON users.id = package_user_role_relationships.bs_user_id']},
@@ -166,7 +183,7 @@ class XpathEngine
     @operators = [:eq, :and, :or, :neq]
 
     @base_table = ""
-    @conditions = [1]
+    @conditions = []
     @condition_values = []
     @condition_values_needed = 1 # see xpath_func_not
     @joins = []
@@ -205,7 +222,6 @@ class XpathEngine
     @base_table = @tables[tablename]
     raise IllegalXpathError, "unknown table #{tablename}" unless @base_table
 
-
     while @stack.length > 0
       token = @stack.shift
       #logger.debug "next token: #{token.inspect}"
@@ -238,35 +254,31 @@ class XpathEngine
 
     #logger.debug "-------------------- end parsing xpath: #{xpath} ---------------------"
 
-    model = nil
-    select = nil
+    relation = nil
     case @base_table
     when 'packages'
-      model = Package
+      relation = Package.select("distinct(packages.id),packages.*")
       includes = [:project]
-      select = "distinct(packages.id),packages.*"
     when 'projects'
-      model = Project
+      relation = Project.all
       if opt["render_all"]
-        select = "distinct(projects.id),projects.*"
+        relation = relation.select("distinct(projects.id),projects.*")
         includes = [:repositories]
       else
         includes = []
-        select = "distinct(projects.id),projects.name"
+        relation = relation.select("distinct(projects.id),projects.name")
       end
     when 'repositories'
-      model = Repository
+      relation = Repository.select("distinct(repositories.id),repositories.*")
       includes = [:project]
-      select = "distinct(repositories.id),repositories.*"
     when 'requests'
-      model = BsRequest
+      relation = BsRequest.select("distinct(bs_requests.id),bs_requests.*")
       includes = [:bs_request_actions, :bs_request_histories, :reviews]
-      select = "distinct(bs_requests.id),bs_requests.*"
     when 'users'
-      model = User
+      relation = User.all
       includes = []
     when 'issues'
-      model = Issue
+      relation = Issue.all
       includes = [:issue_tracker]
     else
       logger.debug "strange base table: #{@base_table}"
@@ -281,9 +293,12 @@ class XpathEngine
     @limit = opt['limit'].to_i if opt['limit']
     @offset = opt['offset'].to_i if opt['offset']
 
-    logger.debug("#{model.class}.find_each #{ { :select => select, :include => includes, :joins => @joins.flatten.uniq.join(' '),
-                    :conditions => cond_ary, :order => @sort_order, :group => model.table_name + ".id" }.inspect }")
-    model.includes(includes).joins(@joins.flatten.uniq.join(" ")).where(cond_ary).order(@sort_order).select(select).each do |item|
+    logger.debug("#{relation.to_sql}.find_each #{ { :include => includes, :joins => @joins.flatten.uniq.join(' '),
+                    :conditions => cond_ary, :order => @sort_order, }.inspect }")
+    relation = relation.includes(includes).references(includes)
+    relation = relation.joins(@joins.flatten.uniq.join(" ")).where(cond_ary).order(@sort_order)
+    logger.debug relation.explain
+    relation.each do |item|
       # Add some pagination. Standard :offset & :limit aren't available for ActiveModel#find_each,
       # and the :start param only works on primary keys, but we're in a block so we can control
       # what we 'yield' after we constructed our (presumably) huge table with find_each...
@@ -304,6 +319,8 @@ class XpathEngine
   def parse_predicate(root, stack)
     #logger.debug "------------------ predicate ---------------"
     #logger.debug "-- pred_array: #{stack.inspect} --"
+
+    raise IllegalXpathError.new "invalid predicate" if stack.nil?
 
     while stack.length > 0
       token = stack.shift
@@ -377,6 +394,8 @@ class XpathEngine
             raise XpathEngine::IllegalXpathError, "attributes must be $NAMESPACE:$NAME"
           end
           @condition_values_needed.times { @condition_values << tvalues }
+        elsif @last_key and @attribs[table][@last_key][:double]
+          @condition_values_needed.times { @condition_values << [value, value] }
         else
           @condition_values_needed.times { @condition_values << value }
         end
@@ -462,7 +481,13 @@ class XpathEngine
     parse_predicate(root, rv)
     rv_cond = @conditions.pop
 
-    condition = "(#{lv_cond} OR #{rv_cond})"
+    if lv_cond == '0'
+      condition = rv_cond
+    elsif rv_cond == '0'
+      condition = lv_cond
+    else
+      condition = "(#{lv_cond} OR #{rv_cond})"
+    end
     #logger.debug "-- condition: [#{condition}]"
 
     @conditions << condition

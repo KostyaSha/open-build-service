@@ -9,26 +9,16 @@ module Suse
       setup 'invalid_text_encoding'
     end
 
-    class HTTPError < Exception
-      def initialize(resp)
-        @resp = resp
-      end
-
-      def to_s
-        @resp.body
-      end
-
-    end
-
-    class NotFoundError < HTTPError
-    end
-      
     @source_host = CONFIG['source_host']
     @source_port = CONFIG['source_port']
 
     @@backend_logger = Logger.new( "#{Rails.root}/log/backend_access.log" )
-    @backend_time = 0
+    @@backend_time = 0
     
+    def initialize
+     Rails.logger.debug "init backend"
+    end
+
     class << self
 
       attr_accessor :source_host, :source_port
@@ -42,11 +32,11 @@ module Suse
       end
 
       def runtime
-        @backend_time
+        @@backend_time
       end
 
       def reset_runtime
-        @backend_time = 0
+        @@backend_time = 0
       end
 
       def logger
@@ -80,7 +70,7 @@ module Suse
         end
 
         #FIXME: don't call body here, it reads big bodies (files) into memory
-        write_backend_log "GET", host, port, path, response, response.body
+        write_backend_log "GET", host, port, path, response
         handle_response response
       end
 
@@ -112,7 +102,7 @@ module Suse
             raise Timeout::Error
           end
         end
-        write_backend_log method, host, port, path, response, data
+        write_backend_log method, host, port, path, response
         handle_response response
       end
 
@@ -136,7 +126,7 @@ module Suse
           http.read_timeout = 1000
           http.request backend_request
         end
-        write_backend_log"DELETE", host, port, path, response, response.body
+        write_backend_log "DELETE", host, port, path, response
         handle_response response
         #do_delete(source_host, source_port, path)
       end
@@ -173,17 +163,17 @@ module Suse
       end
 
       def send_notification(type, params)
-	return if CONFIG['global_write_through'] == false
-	params[:who] ||= User.current.login
-	params[:sender] ||= User.current.login
-	logger.debug "send_notification #{type} #{params}"
-	data = []
-	params.each do |key, value|
-	  next if value.nil?
-	  data << "#{key}=#{CGI.escape(value.to_s)}"
-	end
+        return if CONFIG['global_write_through'] == false
+        params[:who] ||= User.current.login
+        params[:sender] ||= User.current.login
+        logger.debug "send_notification #{type} #{params}"
+        data = []
+        params.each do |key, value|
+          next if value.nil?
+          data << "#{key}=#{CGI.escape(value.to_s)}"
+        end
 
-	post("/notify/#{type}?#{data.join('&')}", '')
+        post("/notify/#{type}?#{data.join('&')}", '')
       end
 
       private
@@ -192,33 +182,36 @@ module Suse
         Time.now.strftime "%Y%m%dT%H%M%S"
       end
 
-      def write_backend_log(method, host, port, path, response, data)
+      def write_backend_log(method, host, port, path, response)
         raise "write backend log without start time" unless @start_of_last
         timedelta = Time.now - @start_of_last
         @start_of_last = nil
         @@backend_logger.info "#{now} #{method} #{host}:#{port}#{path} #{response.code} #{timedelta}"
-        @backend_time += timedelta
-        logger.debug "request took #{timedelta}"
+        @@backend_time += timedelta
+        logger.debug "request took #{timedelta} #{@@backend_time}"
 
-        if (defined? CONFIG['extended_backend_log']) and CONFIG['extended_backend_log']
+        if CONFIG['extended_backend_log']
+          data = response.body
           if data.nil?
             @@backend_logger.info "(no data)"
           elsif data.class == 'String' and data[0,1] == "<"
             @@backend_logger.info data
           else
-            @@backend_logger.info"(non-XML data)"
+            @@backend_logger.info"(non-XML data) #{data.class}"
           end
         end
       end
 
       def handle_response( response )
         case response
-        when Net::HTTPSuccess, Net::HTTPRedirection
+        when Net::HTTPSuccess, Net::HTTPRedirection, Net::HTTPOK
           return response
         when Net::HTTPNotFound
-          raise NotFoundError.new(response)
+          raise ActiveXML::Transport::NotFoundError, response.read_body.force_encoding("UTF-8")
         else
-          raise HTTPError.new(response)
+          message = response.read_body
+          message = response.to_s if message.blank?
+          raise ActiveXML::Transport::Error, message.force_encoding("UTF-8")
         end
       end
 

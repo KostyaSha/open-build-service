@@ -9,17 +9,7 @@ class AttribType < ActiveRecord::Base
   has_many :allowed_values, :class_name => 'AttribAllowedValue', :dependent => :destroy
   has_many :attrib_type_modifiable_bies, :class_name => 'AttribTypeModifiableBy', :dependent => :destroy
 
-  attr_accessible :name, :attrib_namespace, :value_count
-
   class << self
-    def list_all(namespace=nil)
-      if namespace
-        joins(:attrib_namespace).where("attrib_namespaces.name = ?", namespace).select("attrib_types.id,attrib_types.name").all
-      else
-        select("id,name").all
-      end
-    end
-
     def find_by_name(name)
       name_parts = name.split(/:/)
       if name_parts.length != 2
@@ -71,7 +61,11 @@ class AttribType < ActiveRecord::Base
          attr.count self.value_count
        end
 
-       abies = attrib_type_modifiable_bies.includes(:user, :group, :role).all
+       if self.issue_list
+         attr.issue_list
+       end
+
+       abies = attrib_type_modifiable_bies.includes(:user, :group, :role)
        if abies.length > 0
          abies.each do |mod_rule|
            p={}
@@ -118,6 +112,9 @@ class AttribType < ActiveRecord::Base
       node.elements.each("count") do |c|
         self.value_count = c.text
       end
+
+      # allow issues?
+      self.issue_list = !node.elements.find("issue_list").nil?
 
       # default values of a attribute stored
       self.default_values.delete_all

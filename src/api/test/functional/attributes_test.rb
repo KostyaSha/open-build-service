@@ -29,7 +29,7 @@ class AttributeControllerTest < ActionDispatch::IntegrationTest
 
     get "/attribute/OBS"
     assert_response :success
-    count = 14
+    count = 15
     assert_xml_tag :tag => 'directory', :attributes => { :count => count }
     assert_xml_tag :children => { :count => count }
     assert_xml_tag :child => { :tag => 'entry', :attributes => { :name => "Maintained" } }
@@ -155,12 +155,66 @@ class AttributeControllerTest < ActionDispatch::IntegrationTest
     assert_response 404
   end
 
+  def test_with_issue
+    # create test namespace
+    prepare_request_with_user "king", "sunflower"
+    data = "<namespace name='TEST'><modifiable_by user='adrian'/></namespace>"
+    prepare_request_with_user "king", "sunflower"
+    post "/attribute/TEST/_meta", data
+    assert_response :success
+
+    reset_auth
+    data = "<definition namespace='TEST' name='Dummy'>
+              <issue_list/>
+            </definition>"
+
+    prepare_request_with_user "adrian", "so_alone"
+    post "/attribute/TEST/Dummy/_meta", data
+    assert_response :success
+    get "/attribute/TEST/Dummy/_meta"
+    assert_response :success
+
+    # set issues
+    data = "<attributes><attribute namespace='TEST' name='Dummy'>
+              <issue name='123' tracker='bnc'/> 
+              <issue name='456' tracker='bnc'/> 
+            </attribute></attributes>"
+    post "/source/home:adrian/_attribute", data
+    assert_response :success
+
+    get "/source/home:adrian/_attribute/TEST:Dummy"
+    assert_response :success
+    assert_xml_tag :parent => { :tag => 'attribute', :attributes => { :name => "Dummy", :namespace => "TEST" } },
+                   :tag => 'issue', :attributes => { :name => "123", :tracker => "bnc" }
+    assert_xml_tag :parent => { :tag => 'attribute', :attributes => { :name => "Dummy", :namespace => "TEST" } },
+                   :tag => 'issue', :attributes => { :name => "456", :tracker => "bnc" }
+
+    # remove one
+    data = "<attributes><attribute namespace='TEST' name='Dummy'>
+              <issue name='456' tracker='bnc'/> 
+            </attribute></attributes>"
+    post "/source/home:adrian/_attribute", data
+    assert_response :success
+    get "/source/home:adrian/_attribute/TEST:Dummy"
+    assert_response :success
+    assert_no_xml_tag :parent => { :tag => 'attribute', :attributes => { :name => "Dummy", :namespace => "TEST" } },
+                   :tag => 'issue', :attributes => { :name => "123", :tracker => "bnc" }
+    assert_xml_tag :parent => { :tag => 'attribute', :attributes => { :name => "Dummy", :namespace => "TEST" } },
+                   :tag => 'issue', :attributes => { :name => "456", :tracker => "bnc" }
+
+    # cleanup
+    delete "/attribute/TEST/Dummy/_meta"
+    assert_response :success
+    get "/attribute/TEST/Dummy/_meta"
+    assert_response 404
+  end
+
   def test_attrib_type_meta
     prepare_request_with_user "Iggy", "asdfasdf"
 
     get "/attribute/OBS"
     assert_response :success
-    count = 14
+    count = 15
     assert_xml_tag :tag => 'directory', :attributes => { :count => count }
     assert_xml_tag :children => { :count => count }
     assert_xml_tag :child => { :tag => 'entry', :attributes => { :name => "Maintained" } }

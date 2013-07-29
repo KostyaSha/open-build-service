@@ -19,6 +19,10 @@ class ConfigurationsControllerTest < ActionDispatch::IntegrationTest
     put '/configuration', config
     assert_response 403 # Normal users can't change site-wide configuration
 
+    # the webui calls that
+    get '/configuration.json'
+    assert_response :success
+
     prepare_request_with_user 'king', 'sunflower' # User with admin rights
     # webui is using this way to store data
     put '/configuration?title=openSUSE&description=blah_fasel&name=obsname'
@@ -37,6 +41,16 @@ class ConfigurationsControllerTest < ActionDispatch::IntegrationTest
                    :tag => "arch", :content => "s390x"
     assert_no_xml_tag :parent => { :tag => "schedulers" },
                    :tag => "arch", :content => "i586"
+
+    # overwriting options.yml is not allowed
+    ::Configuration::OPTIONS_YML[:registration] = "allow"
+    put '/configuration?registration=never'
+    assert_response 403
+    assert_xml_tag :tag => "status", :attributes => { :code => "no_permission_to_change" }
+    ::Configuration::OPTIONS_YML[:registration] = "never"
+    put '/configuration?registration=never'
+    assert_response :success
+    ::Configuration::OPTIONS_YML[:registration] = nil
 
     # reset
     put '/configuration', config

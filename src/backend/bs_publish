@@ -37,7 +37,7 @@ use Fcntl qw(:DEFAULT :flock);
 use Data::Dumper;
 use Storable ();
 
-use BSConfig;
+use BSConfiguration;
 use BSRPC;
 use BSUtil;
 use BSDBIndex;
@@ -499,7 +499,7 @@ ARCH.sh4 sh4 noarch
 ARCH.aarch64 aarch64 noarch
 ARCH.armv4l arm       armv4l noarch
 ARCH.armv5l arm armel armv4l armv5l armv5tel noarch
-ARCH.armv6l arm armel armv4l armv5l armv5tel armv6l armv6vl noarch
+ARCH.armv6l arm armel armv4l armv5l armv5tel armv6l armv6vl armv6hl noarch
 ARCH.armv7l arm armel armv4l armv5l armv5tel armv6l armv6vl armv7l armv7hl noarch
 ARCH.i686 i686 i586 i486 i386 noarch
 ARCH.i586 i586 i486 i386 noarch
@@ -1663,15 +1663,15 @@ publishprog_done:
   # support for regex usage in $BSConfig::publishedhook
   my $publish_prp = $prp;
   if ($BSConfig::publishedhook_use_regex) {
-    for my $key (keys %BSConfig::publishedhook) {
-      if ($prp =~ /$key/) {
+    for my $key (sort {$b cmp $a} keys %{$BSConfig::publishedhook}) {
+      if ($prp =~ /^$key/) {
         $publish_prp = $key;
         last;
       }
     }
   }
 
-  if ($BSConfig::publishedhook && $BSConfig::publishedhook->{$prp}) {
+  if ($BSConfig::publishedhook && $BSConfig::publishedhook->{$publish_prp}) {
     qsystem($BSConfig::publishedhook->{$publish_prp}, $prp, $extrep, @changed) && warn("    $BSConfig::publishedhook->{$publish_prp} failed: $?");
   }
 

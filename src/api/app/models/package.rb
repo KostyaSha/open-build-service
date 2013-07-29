@@ -15,6 +15,9 @@ class Package < ActiveRecord::Base
   class SaveError < APIException
     setup "package_save_error"
   end
+  class WritePermissionError < APIException
+    setup "package_write_permission_error"
+  end
   class ReadAccessError < APIException
     setup 'unknown_package', 404, "Unknown package"
   end
@@ -24,7 +27,7 @@ class Package < ActiveRecord::Base
   class ReadSourceAccessError < APIException
     setup 'source_access_no_permission', 403, "Source Access not allowed"
   end
-  belongs_to :project, foreign_key: :db_project_id
+  belongs_to :project, foreign_key: :db_project_id, inverse_of: :packages
 
   has_many :package_user_role_relationships, :dependent => :destroy, foreign_key: :db_package_id
   has_many :package_group_role_relationships, :dependent => :destroy, foreign_key: :db_package_id
@@ -36,7 +39,7 @@ class Package < ActiveRecord::Base
   has_many :download_stats
   has_many :ratings, :as => :db_object, :dependent => :destroy
 
-  has_many :flags, :order => :position, :dependent => :destroy, foreign_key: :db_package_id
+  has_many :flags, -> { order(:position) }, :dependent => :destroy, foreign_key: :db_package_id
 
   belongs_to :develpackage, :class_name => "Package", :foreign_key => 'develpackage_id'
   has_many  :develpackages, :class_name => "Package", :foreign_key => 'develpackage_id'
@@ -44,9 +47,8 @@ class Package < ActiveRecord::Base
   has_many :attribs, :dependent => :destroy, foreign_key: :db_package_id
 
   has_many :package_kinds, :dependent => :destroy, foreign_key: :db_package_id
-  has_many :package_issues, :dependent => :destroy, foreign_key: :db_package_id
+  has_many :package_issues, :dependent => :destroy, foreign_key: :db_package_id # defined in sources
 
-  attr_accessible :name, :title, :description
   after_save :write_to_backend
   before_update :update_activity
   after_rollback :reset_cache
@@ -55,6 +57,9 @@ class Package < ActiveRecord::Base
 
   validates :name, presence: true, length: { maximum: 200 }
   validate :valid_name
+
+  has_one :linked_package, foreign_key: :package_id, dependent: :destroy
+  delegate :links_to, to: :linked_package
 
   class << self
 
@@ -75,12 +80,27 @@ class Package < ActiveRecord::Base
     # use_source: false to skip check for sourceaccess permissions
     # function returns a nil object in case the package is on remote instance
     def get_by_project_and_name( project, package, opts = {} )
-      raise "get_by_project_and_name expects a hash as third arg" unless opts.kind_of? Hash
       opts = { use_source: true, follow_project_links: true }.merge(opts)
+      key = { "get_by_project_and_name" => 1, package: package }.merge(opts)
+
+      key[:user] = User.current.cache_key if User.current
+	 
+      # the cache is only valid if the user, prj and pkg didn't change
+      if project.class == Project
+        key[:project] = project.id
+      else
+        key[:project] = project
+      end
+      pid, old_pkg_time, old_prj_time = Rails.cache.read(key)
+      logger.debug "get_by_project_and_name #{key} #{pid}"
+      if pid
+        pkg=Package.where(id: pid).first
+        return pkg if pkg && pkg.updated_at == old_pkg_time && pkg.project.updated_at == old_prj_time
+        Rails.cache.delete(key) # outdated anyway
+      end
       use_source = opts.delete :use_source
       follow_project_links = opts.delete :follow_project_links
       raise "get_by_project_and_name passed unknown options #{opts.inspect}" unless opts.empty?
-      logger.debug "get_by_project_and_name #{opts.inspect}"
       if project.class == Project
         prj = project
       else
@@ -104,8 +124,9 @@ class Package < ActiveRecord::Base
       raise UnknownObjectError, "#{project}/#{package}" if pkg.nil?
       raise ReadAccessError, "#{project}/#{package}" unless check_access?(pkg)
 
-      pkg.check_source_access! if use_source 
+      pkg.check_source_access! if use_source
 
+      Rails.cache.write(key, [pkg.id, pkg.updated_at, prj.updated_at])
       return pkg
     end
 
@@ -118,7 +139,7 @@ class Package < ActiveRecord::Base
           begin
             answer = Suse::Backend.get("/source/#{URI.escape(project)}/#{URI.escape(package)}")
             return true if answer
-          rescue Suse::Backend::HTTPError
+          rescue ActiveXML::Transport::Error
           end
         end
         return false
@@ -135,7 +156,7 @@ class Package < ActiveRecord::Base
           begin
             answer = Suse::Backend.get("/source/#{URI.escape(project)}/#{URI.escape(package)}")
             return true if answer
-          rescue Suse::Backend::HTTPError
+          rescue ActiveXML::Transport::Error
           end
         end
         return false
@@ -240,6 +261,14 @@ class Package < ActiveRecord::Base
     return self.project.is_locked?
   end
 
+  def check_write_access!
+    return if Rails.env.test? and User.current.nil? # for unit tests
+
+    unless User.current.can_modify_package? self
+      raise WritePermissionError, "No permission to modify package '#{self.name}' for user '#{User.current.login}'"
+    end
+  end
+
   # NOTE: this is no permission check, should it be added ?
   def can_be_deleted?
     # check if other packages have me as devel package
@@ -286,15 +315,27 @@ class Package < ActiveRecord::Base
   end
 
   def add_package_kind( kinds )
+    check_write_access!
     private_set_package_kind( kinds, nil, true )
   end
 
   def set_package_kind( kinds = nil )
+    check_write_access!
     private_set_package_kind( kinds )
   end
 
   def set_package_kind_from_commit( commit )
+    check_write_access!
     private_set_package_kind( nil, commit )
+  end
+
+  def dir_hash
+    begin
+      directory = Suse::Backend.get("/source/#{URI.escape(self.project.name)}/#{URI.escape(self.name)}").body
+      Xmlhash.parse(directory)
+    rescue ActiveXML::Transport::Error => e
+      Xmlhash::XMLHash.new error: e.summary 
+    end
   end
 
   def private_set_package_kind( kinds=nil, directory=nil, _noreset=nil )
@@ -310,8 +351,11 @@ class Package < ActiveRecord::Base
       # none given, detect by existing UNEXPANDED sources
       Package.transaction do
         self.package_kinds.destroy_all unless _noreset
-        directory = Suse::Backend.get("/source/#{URI.escape(self.project.name)}/#{URI.escape(self.name)}").body unless directory
-        xml = Xmlhash.parse(directory)
+        if directory
+          xml = Xmlhash.parse(directory)
+        else
+          xml = self.dir_hash
+        end
         xml.elements("entry") do |e|
           if e["name"] == '_patchinfo'
             self.package_kinds.create :kind => 'patchinfo'
@@ -350,7 +394,7 @@ class Package < ActiveRecord::Base
           issue = Issue.find_or_create_by_name_and_tracker( i.attributes['name'], i.attributes['tracker'] )
           issue_change[issue] = 'kept' 
         }
-      rescue Suse::Backend::HTTPError
+      rescue ActiveXML::Transport::Error
       end
 
       # issues introduced by local changes
@@ -362,7 +406,7 @@ class Package < ActiveRecord::Base
             issue = Issue.find_or_create_by_name_and_tracker( i.attributes['name'], i.attributes['tracker'] )
             issue_change[issue] = i.attributes['state']
           }
-        rescue Suse::Backend::HTTPError
+        rescue ActiveXML::Transport::Error
         end
       end
 
@@ -420,6 +464,7 @@ class Package < ActiveRecord::Base
   end
 
   def update_from_xml( xmlhash )
+    check_write_access!
     self.title = xmlhash.value('title')
     self.description = xmlhash.value('description')
     self.bcntsynctag = nil
@@ -572,6 +617,9 @@ class Package < ActiveRecord::Base
     if atype.value_count and atype.value_count > 0 and not attrib.has_element? :value
       raise SaveError, "attribute '#{attrib.namespace}:#{attrib.name}' requires #{atype.value_count} values, but none given"
     end
+    if attrib.has_element? :issue and not atype.issue_list
+      raise SaveError, "attribute '#{attrib.namespace}:#{attrib.name}' has issue elements which are not allowed in this attribute"
+    end
 
     # verify with allowed values for this attribute definition
     if atype.allowed_values.length > 0
@@ -614,6 +662,7 @@ class Package < ActiveRecord::Base
   end
 
   def store(opts = {})
+    # no write access check here, since this operation may will disable this permission ...
     @commit_opts = opts
     save!
   end
@@ -647,6 +696,7 @@ class Package < ActiveRecord::Base
   end
 
   def add_user( user, role )
+    check_write_access!
     unless role.kind_of? Role
       role = Role.get_by_title(role)
     end
@@ -667,6 +717,7 @@ class Package < ActiveRecord::Base
   end
 
   def add_group( group, role )
+    check_write_access!
     unless role.kind_of? Role
       role = Role.get_by_title(role)
     end
@@ -687,7 +738,7 @@ class Package < ActiveRecord::Base
   end
 
   def each_user( opt={}, &block )
-    users = package_user_role_relationships.joins(:role, :user).select("users.login as login, roles.title AS role_name")
+    users = package_user_role_relationships.joins(:role, :user).select("users.login as login, roles.title AS role_name").order("role_name, login")
     if( block )
       users.each do |u|
         block.call u.login, u.role_name
@@ -697,7 +748,7 @@ class Package < ActiveRecord::Base
   end
 
   def each_group( opt={}, &block )
-    groups = package_group_role_relationships.joins(:role, :group).select("groups.title as title, roles.title as role_name")
+    groups = package_group_role_relationships.joins(:role, :group).select("groups.title as title, roles.title as role_name").order("role_name, title")
     if( block )
       groups.each do |g|
         block.call g.title, g.role_name
@@ -728,8 +779,18 @@ class Package < ActiveRecord::Base
       self.package_kinds.each do |k|
         package.kind(k.kind)
       end
-      self.package_issues.each do |i|
-        next if filter_changes and not filter_changes.include? i.change
+      # issues defined in sources
+      issues = self.package_issues
+      # add issues defined in attributes
+      attribs.each do |attr|
+        next unless attr.attrib_type.issue_list
+        issues += attr.issues
+      end
+      # filter and render them
+      issues.each do |i|
+        change = nil
+        change = i.change if i.class == PackageIssue
+        next if filter_changes and (not change or not filter_changes.include? change)
         next if states and (not i.issue.state or not states.include? i.issue.state)
         o = nil
         if i.issue.owner_id
@@ -737,7 +798,7 @@ class Package < ActiveRecord::Base
           o = User.find i.issue.owner_id
         end
         next if login and (not o or not login == o.login)
-        i.issue.render_body(package, i.change)
+        i.issue.render_body(package, change)
       end
     end
 
@@ -763,6 +824,11 @@ class Package < ActiveRecord::Base
         p[:namespace] = attr.attrib_type.attrib_namespace.name
         p[:binary] = attr.binary if attr.binary
         a.attribute(p) do |y|
+          if attr.issues.length>0
+            attr.issues.each do |ai|
+              y.issue(:name => ai.issue.name, :tracker => ai.issue.issue_tracker.name)
+            end
+          end
           if attr.values.length > 0
             attr.values.each do |val|
               y.value(val.value)
@@ -899,6 +965,7 @@ class Package < ActiveRecord::Base
     # the value we add to the activity, when the object gets updated
     addon = 10 * (Time.now.to_f - self.updated_at_was.to_f) / 86400
     addon = 10 if addon > 10
+    logger.debug "update_activity #{activity} #{addon} #{Time.now} #{self.updated_at} #{self.updated_at_was}"
     new_activity = activity + addon
     new_activity = 100 if new_activity > 100
 
@@ -915,14 +982,17 @@ class Package < ActiveRecord::Base
   end
 
   def remove_all_persons
+    check_write_access!
     self.package_user_role_relationships.delete_all
   end
 
   def remove_all_groups
+    check_write_access!
     self.package_group_role_relationships.delete_all
   end
 
   def remove_role(what, role)
+    check_write_access!
     if what.kind_of? Group
       rel = self.package_group_role_relationships.where(bs_group_id: what.id)
     else
@@ -936,6 +1006,7 @@ class Package < ActiveRecord::Base
   end
 
   def add_role(what, role)
+    check_write_access!
     self.transaction do
       if what.kind_of? Group
         self.package_group_role_relationships.create!(role: role, group: what)
@@ -949,13 +1020,13 @@ class Package < ActiveRecord::Base
   def open_requests_with_package_as_source_or_target
     rel = BsRequest.where(state: [:new, :review, :declined]).joins(:bs_request_actions)
     rel = rel.where("(bs_request_actions.source_project = ? and bs_request_actions.source_package = ?) or (bs_request_actions.target_project = ? and bs_request_actions.target_package = ?)", self.project.name, self.name, self.project.name, self.name)
-    return BsRequest.where(id: rel.select("bs_requests.id").all.map { |r| r.id})
+    return BsRequest.where(id: rel.select("bs_requests.id").map { |r| r.id})
   end
 
   def open_requests_with_by_package_review
     rel = BsRequest.where(state: [:new, :review])
     rel = rel.joins(:reviews).where("reviews.state = 'new' and reviews.by_project = ? and reviews.by_package = ? ", self.project.name, self.name)
-    return BsRequest.where(id: rel.select("bs_requests.id").all.map { |r| r.id})
+    return BsRequest.where(id: rel.select("bs_requests.id").map { |r| r.id})
   end
 
   def user_has_role?(user, role)
@@ -983,13 +1054,14 @@ class Package < ActiveRecord::Base
     return false unless name.kind_of? String
     # this length check is duplicated but useful for other uses for this function
     return false if name.length > 200 || name.blank?
-    name = name.gsub %r{^_product:}, ''
-    name.gsub! %r{^_patchinfo:}, ''
+    return true if name =~ /\A_product:\w[-+\w\.]*\z/
+    # obsolete, just for backward compatibility
+    return true if name =~ /\A_patchinfo:\w[-+\w\.]*\z/
     return false if name =~ %r{[ \/:\000-\037]}
     if name =~ %r{^[_\.]} && !['_product', '_pattern', '_project', '_patchinfo'].include?(name)
       return false
     end
-    return true
+    return name =~ /\A\w[-+\w\.]*\z/
   end
 
   def valid_name
@@ -1010,33 +1082,24 @@ class Package < ActiveRecord::Base
     srcmd5 = opts[:srcmd5]
 
     # check current srcmd5
-    begin
-      cdir = Directory.find(:project => self.project.name,
-                            :package => self.name,
-                            :expand  => 1)
-      csrcmd5 = cdir.value('srcmd5') if cdir
-    rescue ActiveXML::Transport::Error => e
-      csrcmd5 = nil
-    end
-
-    if tproj
-      tocheck_repos = self.project.repositories_linking_project(tproj, ActiveXML.transport)
-    else
-      tocheck_repos = self.project.repositories
-    end
+    cdir = Directory.hashed(project: self.project.name,
+                            package: self.name,
+                            expand: 1)
+    csrcmd5 = cdir['srcmd5']
+    tocheck_repos = self.project.repositories_linking_project(tproj)
 
     raise NoRepositoriesFound.new if tocheck_repos.empty?
 
     output = {}
     tocheck_repos.each do |srep|
-      output[srep.name] ||= {}
+      output[srep['name']] ||= {}
       trepo             = []
       archs             = []
-      srep.each_path do |p|
-        if p.project != self.project.name
-          r = Repository.find_by_project_and_repo_name(p.project, p.value(:repository))
-          r.architectures.each { |a| archs << a.name }
-          trepo << [p.project, p.value(:repository)]
+      srep.elements('path') do |p|
+        if p['project'] != self.project.name
+          r = Repository.find_by_project_and_repo_name(p['project'], p['repository'])
+          r.architectures.each { |a| archs << a.name.to_s }
+          trepo << [p['project'], p['repository']]
         end
       end
       archs.uniq!
@@ -1050,32 +1113,52 @@ class Package < ActiveRecord::Base
         next if vprojects.has_key? p
         prj = Project.find_by_name(p)
         next unless prj # in case of remote projects
-        prj.packages.select(:name).each { |n| tpackages[n.name] = p }
+        prj.packages.pluck(:name).each { |n| tpackages[n] = p }
         vprojects[p] = 1
       end
 
       archs.each do |arch|
-        everbuilt     = 0
-        eversucceeded = 0
-        buildcode     =nil
-        hist          = Jobhistory.find(:project    => self.project.name,
-                                        :repository => srep.name,
-                                        :package    => self.name,
-                                        :arch       => arch.to_s, :limit => 20)
-        next unless hist
-        hist.each_jobhist do |jh|
-          next if jh.srcmd5 != srcmd5
-          everbuilt = 1
-          if jh.code == 'succeeded' || jh.code == 'unchanged'
+        everbuilt     = false
+        eversucceeded = false
+        buildcode     = nil
+        # first we check the lastfailures. This route is fast but only has up to
+        # two results per package. If the md5sum does not match, we have to dig deeper
+        hist = Jobhistory.find_hashed(project: self.project.name,
+                                      repository: srep['name'],
+                                      package: self.name,
+                                      arch: arch,
+                                      code: 'lastfailures')
+        next if hist.nil?
+        hist.elements('jobhist') do |jh|
+          if jh['verifymd5'] == srcmd5 || jh['srcmd5'] == srcmd5
+            everbuilt = true
+          end
+        end
+
+        if !everbuilt
+          hist = Jobhistory.find_hashed(project: self.project.name,
+                                        repository: srep['name'],
+                                        package: self.name,
+                                        arch: arch,
+                                        limit: 20,
+                                        expires_in: 15.minutes)
+        end
+
+        # going through the job history to check if it built and if yes, succeeded
+        hist.elements('jobhist') do |jh|
+          next unless jh['verifymd5'] == srcmd5 || jh['srcmd5'] == srcmd5
+          everbuilt = true
+          if jh['code'] == 'succeeded' || jh['code'] == 'unchanged'
             buildcode     ='succeeded'
-            eversucceeded = 1
+            eversucceeded = true
             break
           end
         end
         logger.debug "arch:#{arch} md5:#{srcmd5} successed:#{eversucceeded} built:#{everbuilt}"
         missingdeps=[]
-        if eversucceeded == 1
-          uri = URI("/build/#{CGI.escape(self.project.name)}/#{CGI.escape(srep.name)}/#{CGI.escape(arch.to_s)}/_builddepinfo?package=#{CGI.escape(self.name)}&view=pkgnames")
+        # if
+        if eversucceeded
+          uri = URI("/build/#{CGI.escape(self.project.name)}/#{CGI.escape(srep['name'])}/#{CGI.escape(arch)}/_builddepinfo?package=#{CGI.escape(self.name)}&view=pkgnames")
           begin
             buildinfo = Xmlhash.parse(ActiveXML.transport.direct_http(uri))
           rescue ActiveXML::Transport::Error => e
@@ -1092,26 +1175,26 @@ class Package < ActiveRecord::Base
         end
 
         # if the package does not appear in build history, check flags
-        if everbuilt == 0
-          buildflag=self.find_flag_state("build", srep.name, arch.to_s)
-          logger.debug "find_flag_state #{srep.name} #{arch.to_s} #{buildflag}"
+        if !everbuilt
+          buildflag=self.find_flag_state("build", srep['name'], arch)
+          logger.debug "find_flag_state #{srep['name']} #{arch} #{buildflag}"
           if buildflag == 'disable'
             buildcode='disabled'
           end
         end
 
-        if !buildcode && srcmd5 != csrcmd5 && everbuilt == 1
+        if !buildcode && srcmd5 != csrcmd5 && everbuilt
           buildcode='failed' # has to be
         end
 
         unless buildcode
           buildcode="unknown"
           begin
-            uri         = URI("/build/#{CGI.escape(self.project.name)}/_result?package=#{CGI.escape(self.name)}&repository=#{CGI.escape(srep.name)}&arch=#{CGI.escape(arch.to_s)}")
-            resultlist  = ActiveXML::Node.new(ActiveXML.transport.direct_http(uri))
+            uri         = URI("/build/#{CGI.escape(self.project.name)}/_result?package=#{CGI.escape(self.name)}&repository=#{CGI.escape(srep['name'])}&arch=#{CGI.escape(arch)}")
+            resultlist  = Xmlhash.parse(ActiveXML.transport.direct_http(uri))
             currentcode = nil
-            resultlist.each_result do |r|
-              r.each_status { |s| currentcode = s.value(:code) }
+            resultlist.elements('result') do |r|
+              r.elements('status') { |s| currentcode = s['code'] }
             end
           rescue ActiveXML::Transport::Error
             currentcode = nil
@@ -1135,12 +1218,33 @@ class Package < ActiveRecord::Base
           end
         end
 
-        output[srep.name][arch.to_s] = { result: buildcode }
-        output[srep.name][arch.to_s][:missing] = missingdeps.uniq if (missingdeps.size > 0 && buildcode == 'succeeded')
+        output[srep['name']][arch] = { result: buildcode }
+        output[srep['name']][arch][:missing] = missingdeps.uniq
       end
     end
 
     output
   end
 
+  def update_linkinfo
+     dir = self.dir_hash
+     # we will later delete all links not touched, so just go to return here
+     return if dir.blank?
+     li = dir['linkinfo']
+     if !li
+        self.linked_package.delete if self.linked_package
+        return
+     end
+     Rails.logger.debug "Syncing link #{self.project.name}/#{self.name} -> #{li['project']}/#{li['package']}"
+     # we have to be careful - the link target can be nowhere
+     link = Package.find_by_project_and_name(li['project'], li['package'])
+     unless link
+       self.linked_package.delete if self.linked_package
+       return
+     end
+
+     self.linked_package ||= LinkedPackage.new(links_to: link)
+     self.linked_package.save # update updated_at
+
+  end
 end

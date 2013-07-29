@@ -256,8 +256,9 @@ OBSApi::Application.routes.draw do
 
     ### /lastevents
 
-    match '/lastevents' => 'public#lastevents', via: :get
-    match '/lastevents' => 'source#lastevents', via: :post
+    get '/lastevents' => 'source#lastevents_public'
+    match 'public/lastevents' => "source#lastevents_public", via: [:get, :post]
+    post '/lastevents' => 'source#lastevents'
 
     ### /distributions
 
@@ -282,7 +283,6 @@ OBSApi::Application.routes.draw do
       get 'public/source/:project/:package' => :package_index, :constraints => cons
       get 'public/source/:project/:package/_meta' => :package_meta, :constraints => cons
       get 'public/source/:project/:package/:filename' => :source_file, :constraints => cons
-      match 'public/lastevents' => :lastevents, via: [:get, :post]
       get 'public/distributions' => :distributions
       get 'public/binary_packages/:project/:package' => :binary_packages, :constraints => cons
     end
@@ -309,6 +309,7 @@ OBSApi::Application.routes.draw do
       post 'webui/change_role' => :change_role
       get 'webui/all_projects' => :all_projects
       get 'webui/owner' => :owner
+      get 'webui/project_status' => :project_status
     end
 
     get "/404" => "main#notfound"

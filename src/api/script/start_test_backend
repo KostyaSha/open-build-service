@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 ENV['RAILS_ENV'] = 'test'
+ENV['LC_ALL'] = 'C'
 require File.expand_path(File.join(File.dirname(__FILE__), '..', 'config', 'environment'))
 require File.expand_path(File.dirname(__FILE__)) + "/../test/test_helper"
 
@@ -45,6 +46,7 @@ FileUtils.rm_rf("#{Rails.root}/tmp/backend_config")
 unless @http_user
   # we only need the fixtures if rake test didn't load it yet
   system("rake --trace db:fixtures:load")
+  @http_user = User.find_by_login( "king" )
 end
 User.current = @http_user
 

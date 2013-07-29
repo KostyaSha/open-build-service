@@ -285,7 +285,7 @@ sub getconstraints {
 }
 
 # last one wins
-sub mergerconstraints {
+sub mergeconstraints {
   my ($con, @other) = @_;
   $con = Storable::dclone($con);
   for my $con2 (@other) {
@@ -318,7 +318,7 @@ sub mergerconstraints {
 
 # constructs a data object from a list and a XML::Structured dtd
 sub list2struct {
-  my ($dtd, $list) = @_;
+  my ($dtd, $list, $job) = @_;
   my $top = {};
   for my $l (@{$list || []}) {
     my @l = @$l;
@@ -389,7 +389,7 @@ sub list2struct {
 	}
       }
     };
-    warn("list2struct: $@") if $@;
+    warn("list2struct: $job: @$l: $@") if $@;
   }
   return $top;
 }
@@ -420,14 +420,11 @@ if ($BSConfig::secure_sandboxes) {
 sub oracle {
   my ($job, $worker, $constraints) = @_;
   for my $l (@{$constraints->{'hostlabel'} || []}) {
-    if ($l->{'exclude'} eq 'true') {
+    if ($l->{'exclude'} && $l->{'exclude'} eq 'true') {
       return 0 if grep {$_ eq $l->{'_content'}} @{$worker->{'hostlabel'} || []};
     } else {
       return 0 unless grep {$_ eq $l->{'_content'}} @{$worker->{'hostlabel'} || []};
     }
-  }
-  if ($constraints->{'hostlabel'}) {
-    return 0 unless grep {$_ eq $constraints->{'hostlabel'}} @{$worker->{'hostlabel'} || []};
   }
   if ($constraints->{'sandbox'} && $constraints->{'sandbox'}->{'content'}) {
     if ($constraints->{'sandbox'}->{'exclude'} && $constraints->{'sandbox'}->{'exclude'} eq 'true') {
@@ -1064,13 +1061,14 @@ while (1) {
 	  next;
 	}
       }
-      if ($ic->{'job'}->{'prjconstraint'}) {
-	my @l = map { [ split(' ', $_) ] } @{$ic->{'job'}->{'prjconstraint'}};
-	my $prjconstraints = list2struct($BSXML::constraints, \@l);
-	if ($prjconstraints) {
-	  $constraints = $constraints ? mergeconstraints($prjconstraints, $constraints) : $prjconstraints;
+      if ($ic->{$job}->{'prjconfconstraint'}) {
+	my @l = map { [ split(' ', $_) ] } @{$ic->{$job}->{'prjconfconstraint'}};
+	my $prjconfconstraint = list2struct($BSXML::constraints, \@l, "$arch/$job");
+	if ($prjconfconstraint) {
+	  $constraints = $constraints ? mergeconstraints($prjconfconstraint, $constraints) : $prjconfconstraint;
 	}
       }
+      undef $constraints if $constraints && !%$constraints;
       push @idle, '__lastoracle' if $constraints;
       for my $idle (@idle) {
 	if ($idle eq '__lastoracle') {
@@ -1078,7 +1076,6 @@ while (1) {
 	  $idle = $lastoracleidle;
 	  $lastoracleidle = '__lastoracle';
 	}
-	last unless -e "$jobsdir/$arch/$job";
         next if $badhost{"$project/$ic->{$job}->{'package'}/$arch/@{[(split(':', $idle, 2))[1]]}"};
 	if (!$workerinfo{$idle}) {
 	  my @s = stat("$workersdir/idle/$idle");
@@ -1116,6 +1113,7 @@ while (1) {
 	    }
 	  }
 	}
+	last unless -e "$jobsdir/$arch/$job";
 	last if $assigned && $tries >= 5;
 	$tries++;
 	my $res = assignjob($job, $idle, $arch);

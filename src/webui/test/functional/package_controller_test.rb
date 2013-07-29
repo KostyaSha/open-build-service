@@ -34,4 +34,28 @@ class PackageControllerTest < ActionDispatch::IntegrationTest
     delete_and_recreate_kdelibs
   end
 
+  test "Iggy adds himself as reviewer" do
+    login_Iggy
+    visit package_users_path(package: "TestPack", project: "home:Iggy")
+    check('user_reviewer_Iggy')
+    # wait for it to be clickable again before switching pages
+    page.wont_have_xpath('.//input[@id="user_reviewer_Iggy"][@disabled="disabled"]')
+    click_link "Meta"
+    page.must_have_text '<person userid="Iggy" role="reviewer"/>'
+  end
+
+  test "Iggy removes himself as bugowner" do
+    login_Iggy
+    visit package_meta_path(package: "TestPack", project: "home:Iggy")
+    page.must_have_text '<person userid="Iggy" role="bugowner"/>'
+    within '#package_tabs' do
+     click_link("Users")
+    end
+    uncheck('user_bugowner_Iggy')
+    # wait for it to be clickable again before switching pages
+    page.wont_have_xpath './/input[@id="user_bugowner_Iggy"][@disabled="disabled"]'
+    click_link "Meta"
+    page.wont_have_text '<person userid="Iggy" role="bugowner"/>'
+  end
+
 end

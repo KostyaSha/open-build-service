@@ -1,11 +1,11 @@
 # Filters added to this controller will be run for all controllers in the application.
 # Likewise, all the methods added will be available for all controllers.
 
-require 'opensuse/permission'
-require 'opensuse/backend'
-require 'opensuse/validator'
+require_dependency 'opensuse/permission'
+require_dependency 'opensuse/backend'
+require_dependency 'opensuse/validator'
 require 'rexml/document'
-require 'api_exception'
+require_dependency 'api_exception'
 
 class ApplicationController < ActionController::API
 
@@ -19,6 +19,7 @@ class ApplicationController < ActionController::API
     setup "invalid_parameter"
   end
 
+  include ActionController::ImplicitRender
   include ActionController::MimeResponds
 
   # session :disabled => true
@@ -27,17 +28,17 @@ class ApplicationController < ActionController::API
   @http_user = nil
   @skip_validation = false
 
-  before_filter :validate_xml_request, :add_api_version
+  before_action :validate_xml_request, :add_api_version
   if CONFIG['response_schema_validation'] == true
-    after_filter :validate_xml_response
+    after_action :validate_xml_response
   end
 
   # skip the filter for the user stuff
-  before_filter :extract_user
-  before_filter :setup_backend
-  before_filter :shutup_rails
-  before_filter :set_current_user
-  before_filter :validate_params
+  before_action :extract_user
+  before_action :setup_backend
+  before_action :shutup_rails
+  before_action :set_current_user
+  before_action :validate_params
 
   #contains current authentification method, one of (:proxy, :basic)
   attr_accessor :auth_method
@@ -50,6 +51,13 @@ class ApplicationController < ActionController::API
     User.current = @http_user
   end
 
+  def load_nobody
+    @http_user = User.find_by_login( "_nobody_" )
+    User.current = @http_user
+    User.current.is_admin = false
+    @user_permissions = Suse::Permission.new( User.current )
+  end
+
   def require_admin
     logger.debug "Checking for  Admin role for user #{@http_user.login}"
     unless @http_user.is_admin?
@@ -57,22 +65,6 @@ class ApplicationController < ActionController::API
       render_error :status => 403, :errorcode => "put_request_no_permission", :message => "Requires admin privileges" and return false
     end
     return true
-  end
-
-  def http_anonymous_user 
-    return User.find_by_login( "_nobody_" )
-  end
-
-  def extract_user_public
-    # to become _public_ special user 
-    if CONFIG['allow_anonymous']
-      @http_user = User.find_by_login( "_nobody_" )
-      @user_permissions = Suse::Permission.new( @http_user )
-      return true
-    end
-    logger.error "No public access is configured"
-    render_error( :message => "No public access is configured", :status => 401 )
-    return false
   end
 
   def validate_params
@@ -107,14 +99,14 @@ class ApplicationController < ActionController::API
         # If we do not find a User here, we need to create a user and wait for
         # the confirmation by the user and the BS Admin Team.
         unless @http_user
-          if CONFIG['new_user_registration'] == "deny"
+          if ::Configuration.registration == "deny"
             logger.debug( "No user found in database, creation disabled" )
             render_error( :message => "User '#{login}' does not exist<br>#{errstr}", :status => 401 )
             @http_user=nil
             return false
           end
           state = User.states['confirmed']
-          state = User.states['unconfirmed'] if CONFIG['new_user_registration'] == "confirmation"
+          state = User.states['unconfirmed'] if ::Configuration.registration == "confirmation"
           # Generate and store a fake pw in the OBS DB that no-one knows
           # FIXME: we should allow NULL passwords in DB, but that needs user management cleanup
           chars = ["A".."Z","a".."z","0".."9"].collect { |r| r.to_a }.join
@@ -129,9 +121,8 @@ class ApplicationController < ActionController::API
         # update user data from login proxy headers
         @http_user.update_user_info_from_proxy_env(request.env) unless @http_user.nil?
       else
-        if CONFIG['allow_anonymous']
-          @http_user = User.find_by_login( "_nobody_" )
-          @user_permissions = Suse::Permission.new( @http_user )
+        if ::Configuration.anonymous?
+          load_nobody
           return true
         end
         logger.error "No X-username header from login proxy! Are we really using an authentification proxy?"
@@ -160,7 +151,7 @@ class ApplicationController < ActionController::API
         #set password to the empty string in case no password is transmitted in the auth string
         passwd ||= ""
       else
-        if @http_user.nil? and CONFIG['allow_anonymous'] 
+        if @http_user.nil? and ::Configuration.anonymous?
           read_only_hosts = []
           read_only_hosts = CONFIG['read_only_hosts'] if CONFIG['read_only_hosts']
           read_only_hosts << CONFIG['webui_host'] if CONFIG['webui_host'] # this was used in config files until OBS 2.1
@@ -168,13 +159,12 @@ class ApplicationController < ActionController::API
             # Fixed list of clients which do support the read only mode
             hua = request.env['HTTP_USER_AGENT']
             if hua && (hua.match(/^obs-webui/) || hua.match(/^obs-software/))
-              @http_user = User.find_by_login( "_nobody_" )
-              @user_permissions = Suse::Permission.new( @http_user )
+              load_nobody
               return true
             end
-	  else
-	    logger.info "anononymous configured, but #{read_only_hosts.inspect} does not include '#{request.env['REMOTE_HOST']}' '#{request.env['REMOTE_ADDR']}'"
-	  end
+          else
+            logger.info "anononymous configured, but #{read_only_hosts.inspect} does not include '#{request.env['REMOTE_HOST']}' '#{request.env['REMOTE_ADDR']}'"
+          end
 
           if login
             render_error :message => "User not yet registered", :status => 403,
@@ -217,7 +207,7 @@ class ApplicationController < ActionController::API
               @http_user.save
             end
           else
-            if CONFIG['new_user_registration'] == "deny"
+            if ::Configuration.registration == "deny"
               logger.debug( "No user found in database, creation disabled" )
               render_error( :message => "User '#{login}' does not exist<br>#{errstr}", :status => 401 )
               @http_user=nil
@@ -248,7 +238,7 @@ class ApplicationController < ActionController::API
             end
             newuser.realname = ldap_info[1]
             newuser.state = User.states['confirmed']
-            newuser.state = User.states['unconfirmed'] if CONFIG['new_user_registration'] == "confirmation"
+            newuser.state = User.states['unconfirmed'] if ::Configuration.registration == "confirmation"
             newuser.adminnote = "User created via LDAP"
             user_role = Role.find_by_title("User")
             newuser.roles << user_role
@@ -375,16 +365,21 @@ class ApplicationController < ActionController::API
     file
   end
 
+  def get_request_path
+    path = request.path
+    query_string = request.query_string
+    if request.form_data?
+      # it's uncommon, but possible that we have both
+      query_string += "&" unless query_string.blank?
+      query_string += request.raw_post
+    end
+    query_string = "?" + query_string unless query_string.blank?
+    path + query_string 
+  end
+
   def pass_to_backend( path = nil )
 
-    unless path
-      path = request.path
-      if not request.query_string.blank?
-        path = path + '?'+request.query_string
-      elsif not request.env["rack.request.form_vars"].blank?
-        path = path + '?' + request.env["rack.request.form_vars"]
-      end
-    end
+    path ||= get_request_path
 
     case request.method.to_s.downcase
     when "get"
@@ -430,7 +425,7 @@ class ApplicationController < ActionController::API
     render_error message: message, status: exception.status, errorcode: exception.errorcode
   end
 
-  rescue_from Suse::Backend::HTTPError do |exception|
+  rescue_from ActiveXML::Transport::Error do |exception|
     xml = REXML::Document.new( exception.message )
     http_status = xml.root.attributes['code']
     unless xml.root.attributes.include? 'origin'
@@ -441,7 +436,15 @@ class ApplicationController < ActionController::API
     render :text => xml_text, :status => http_status
   end
 
-  rescue_from Suse::Backend::NotFoundError, ActiveRecord::RecordNotFound do |exception|
+  rescue_from Project::WritePermissionError do |exception|
+    render_error :status => 403, :errorcode => "modify_project_no_permission", :message => exception.message
+  end
+
+  rescue_from Package::WritePermissionError do |exception|
+    render_error :status => 403, :errorcode => "modify_package_no_permission", :message => exception.message
+  end
+
+  rescue_from ActiveXML::Transport::NotFoundError, ActiveRecord::RecordNotFound do |exception|
     render_error message: exception.message, status: 404, errorcode: 'not_found'
   end
 
@@ -601,7 +604,7 @@ class ApplicationController < ActionController::API
 
   private
   def shutup_rails
-    Rails.cache.silence!
+    Rails.cache.silence! unless Rails.env.development?
   end
 
   def action_fragment_key( options )

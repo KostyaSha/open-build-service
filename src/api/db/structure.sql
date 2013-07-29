@@ -33,6 +33,17 @@ CREATE TABLE `attrib_default_values` (
   CONSTRAINT `attrib_default_values_ibfk_1` FOREIGN KEY (`attrib_type_id`) REFERENCES `attrib_types` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;
 
+CREATE TABLE `attrib_issues` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `attrib_id` int(11) NOT NULL,
+  `issue_id` int(11) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `index_attrib_issues_on_attrib_id_and_issue_id` (`attrib_id`,`issue_id`),
+  KEY `issue_id` (`issue_id`),
+  CONSTRAINT `attrib_issues_ibfk_1` FOREIGN KEY (`attrib_id`) REFERENCES `attribs` (`id`),
+  CONSTRAINT `attrib_issues_ibfk_2` FOREIGN KEY (`issue_id`) REFERENCES `issues` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+
 CREATE TABLE `attrib_namespace_modifiable_bies` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `attrib_namespace_id` int(11) NOT NULL,
@@ -72,6 +83,7 @@ CREATE TABLE `attrib_types` (
   `type` varchar(255) CHARACTER SET utf8 DEFAULT NULL,
   `value_count` int(11) DEFAULT NULL,
   `attrib_namespace_id` int(11) NOT NULL,
+  `issue_list` tinyint(1) DEFAULT '0',
   PRIMARY KEY (`id`),
   UNIQUE KEY `index_attrib_types_on_attrib_namespace_id_and_name` (`attrib_namespace_id`,`name`),
   KEY `index_attrib_types_on_name` (`name`),
@@ -105,6 +117,15 @@ CREATE TABLE `attribs` (
   CONSTRAINT `attribs_ibfk_2` FOREIGN KEY (`db_package_id`) REFERENCES `packages` (`id`),
   CONSTRAINT `attribs_ibfk_3` FOREIGN KEY (`db_project_id`) REFERENCES `projects` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;
+
+CREATE TABLE `backend_infos` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `key` varchar(255) COLLATE utf8_unicode_ci NOT NULL,
+  `value` varchar(255) COLLATE utf8_unicode_ci NOT NULL,
+  `created_at` datetime DEFAULT NULL,
+  `updated_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
 
 CREATE TABLE `blacklist_tags` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -189,6 +210,24 @@ CREATE TABLE `configurations` (
   `created_at` datetime DEFAULT NULL,
   `updated_at` datetime DEFAULT NULL,
   `name` varchar(255) COLLATE utf8_bin DEFAULT '',
+  `registration` enum('allow','confirmation','never') COLLATE utf8_bin DEFAULT 'allow',
+  `anonymous` tinyint(1) DEFAULT '1',
+  `default_access_disabled` tinyint(1) DEFAULT '0',
+  `allow_user_to_create_home_project` tinyint(1) DEFAULT '1',
+  `disallow_group_creation` tinyint(1) DEFAULT '0',
+  `change_password` tinyint(1) DEFAULT '1',
+  `hide_private_options` tinyint(1) DEFAULT '0',
+  `gravatar` tinyint(1) DEFAULT '1',
+  `enforce_project_keys` tinyint(1) DEFAULT '1',
+  `download_on_demand` tinyint(1) DEFAULT '1',
+  `multiaction_notify_support` tinyint(1) DEFAULT '1',
+  `download_url` varchar(255) COLLATE utf8_bin DEFAULT NULL,
+  `ymp_url` varchar(255) COLLATE utf8_bin DEFAULT NULL,
+  `errbit_url` varchar(255) COLLATE utf8_bin DEFAULT NULL,
+  `bugzilla_url` varchar(255) COLLATE utf8_bin DEFAULT NULL,
+  `http_proxy` varchar(255) COLLATE utf8_bin DEFAULT NULL,
+  `no_proxy` varchar(255) COLLATE utf8_bin DEFAULT NULL,
+  `theme` varchar(255) COLLATE utf8_bin DEFAULT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;
 
@@ -356,6 +395,13 @@ CREATE TABLE `issues` (
   CONSTRAINT `issues_ibfk_1` FOREIGN KEY (`owner_id`) REFERENCES `users` (`id`),
   CONSTRAINT `issues_ibfk_2` FOREIGN KEY (`issue_tracker_id`) REFERENCES `issue_trackers` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;
+
+CREATE TABLE `linked_packages` (
+  `links_to_id` int(11) NOT NULL,
+  `package_id` int(11) NOT NULL AUTO_INCREMENT,
+  `updated_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`package_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
 
 CREATE TABLE `linked_projects` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -655,7 +701,8 @@ CREATE TABLE `status_messages` (
   `user_id` int(11) DEFAULT NULL,
   `severity` int(11) DEFAULT NULL,
   PRIMARY KEY (`id`),
-  KEY `user` (`user_id`)
+  KEY `user` (`user_id`),
+  KEY `index_status_messages_on_deleted_at_and_created_at` (`deleted_at`,`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;
 
 CREATE TABLE `taggings` (
@@ -1079,6 +1126,20 @@ INSERT INTO schema_migrations (version) VALUES ('20130612151549');
 INSERT INTO schema_migrations (version) VALUES ('20130618083665');
 
 INSERT INTO schema_migrations (version) VALUES ('20130619083665');
+
+INSERT INTO schema_migrations (version) VALUES ('20130621083665');
+
+INSERT INTO schema_migrations (version) VALUES ('20130626160000');
+
+INSERT INTO schema_migrations (version) VALUES ('20130702083665');
+
+INSERT INTO schema_migrations (version) VALUES ('20130702203665');
+
+INSERT INTO schema_migrations (version) VALUES ('20130723055536');
+
+INSERT INTO schema_migrations (version) VALUES ('20130725123636');
+
+INSERT INTO schema_migrations (version) VALUES ('20130726144516');
 
 INSERT INTO schema_migrations (version) VALUES ('21');
 

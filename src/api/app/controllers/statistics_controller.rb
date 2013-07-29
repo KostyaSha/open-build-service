@@ -23,7 +23,7 @@ class StatisticsController < ApplicationController
     # response.time_to_live = 10.minutes
 
     ratings = Rating.select('db_object_id, db_object_type, count(score) as count,' +
-        'sum(score)/count(score) as score_calculated').group('db_object_id, db_object_type').order('score_calculated DESC').all
+        'sum(score)/count(score) as score_calculated').group('db_object_id, db_object_type').order('score_calculated DESC')
     ratings = ratings.delete_if { |r| r.count.to_i < min_votes_for_rating }
     if @limit
       @ratings = ratings[0..@limit-1]
@@ -92,7 +92,7 @@ class StatisticsController < ApplicationController
   def most_active_projects
     # get all packages including activity values
     @packages = Package.select("packages.*, #{Package.activity_algorithm}").
-	    limit(@limit).order('activity_value DESC').all
+	    limit(@limit).order('activity_value DESC')
     # count packages per project and sum up activity values
     projects = {}
     @packages.each do |package|
@@ -114,7 +114,7 @@ class StatisticsController < ApplicationController
   def most_active_packages
     # get all packages including activity values
     @packages = Package.select("packages.*, #{Package.activity_algorithm}").
-      limit(@limit).order('activity_value DESC').all
+      limit(@limit).order('activity_value DESC')
     return @packages
   end
 
@@ -127,8 +127,8 @@ class StatisticsController < ApplicationController
 
   def latest_added
 
-    packages = Package.limit(@limit).order('created_at DESC, name').all
-    projects = Project.limit(@limit).order('created_at DESC, name').all
+    packages = Package.limit(@limit).order('created_at DESC, name')
+    projects = Project.limit(@limit).order('created_at DESC, name')
 
     list = projects 
     list.concat packages
@@ -154,38 +154,19 @@ class StatisticsController < ApplicationController
 
   def latest_updated
     @limit = 10 unless @limit
-    # first we catch a list visible to anyone
-    # not just needs this to be fast, it also needs to catch errors in case projects or packages
-    # disappear after the cache hit. So we do not spend too much logic in access flags, but check
-    # the cached values afterwards if they are valid and accessible
-    packages = Package.select("id,updated_at").order("updated_at DESC").limit(@limit*2).all
-    projects = Project.select("id,updated_at").order("updated_at DESC").limit(@limit*2).all
 
-    list = projects
-    list.concat packages
-    ret = Array.new
-    list.sort { |a,b| b.updated_at <=> a.updated_at }.each do |item|
-      if item.instance_of? Package
-        ret << [:package, item.id]
-      else
-        ret << [:project, item.id]
-      end
-    end
-    list = ret
+    packages = Package.order("updated_at DESC").limit(@limit).pluck(:name, :db_project_id, :updated_at).map { |name, project, at| [at, name, project] }
+    projects = Project.order("updated_at DESC").limit(@limit).pluck(:name, :updated_at).map { |name, at| [at, name, :project] }
 
-    @list = Array.new
-    list.each do |type, id|
-      if type == :project
-        item = Project.find(id)
-        next unless Project.check_access?(item)
-      else
-        item = Package.find(id)
-        next unless item
-        next unless Package.check_access?(item)
-      end
-      @list << item
-      break if @list.size == @limit
+    packprojs = Hash.new
+    Project.where(id: packages.map { |x| x[2] }).pluck(:id, :name).each do |id, name|
+      packprojs[id] = name
     end
+    packages.map! { |at, name, project| [at, :package, name, packprojs[project] ] }
+
+    @list = packages + projects
+    @list.sort! { |a,b| b[0] <=> a[0] }
+    @list = @list.slice(0, @limit)
   end
 
 
@@ -224,7 +205,7 @@ class StatisticsController < ApplicationController
 
     # get all requests to it
     reqs = BsRequestAction.where(target_project: projects).select(:bs_request_id).map {|a| a.bs_request_id}.uniq.sort
-    reqs = BsRequest.where("id in (?)", reqs).select([:id, :created_at, :creator]).all
+    reqs = BsRequest.where("id in (?)", reqs).select([:id, :created_at, :creator])
     if params[:raw] == '1'
       render json: reqs
       return

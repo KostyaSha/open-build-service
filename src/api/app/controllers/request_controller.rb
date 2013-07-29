@@ -33,7 +33,7 @@ class RequestController < ApplicationController
       rel = BsRequest.collection(params)
       rel = rel.includes([:reviews, :bs_request_histories])
       rel = rel.includes({bs_request_actions: :bs_request_action_accept_info})
-      rel = rel.order('bs_requests.id')
+      rel = rel.order('bs_requests.id').references(:bs_requests)
 
       xml = ActiveXML::Node.new "<collection/>"
       matches=0
@@ -48,8 +48,8 @@ class RequestController < ApplicationController
       # OBS3: make this more useful
       builder = Nokogiri::XML::Builder.new
       builder.directory do
-        BsRequest.select(:id).order(:id).each do |r|
-          builder.entry name: r.id
+        BsRequest.order(:id).pluck(:id).each do |r|
+          builder.entry name: r
         end
       end
       render :text => builder.to_xml, :content_type => "text/xml"
@@ -517,7 +517,7 @@ class RequestController < ApplicationController
   # POST /request?cmd=create
   def create_create
     # refuse request creation for anonymous users
-    if User.current == http_anonymous_user
+    if User.current.id == User.nobodyID
       render_error :status => 401, :errorcode => 'anonymous_user',
                    :message => "Anonymous user is not allowed to create requests"
       return

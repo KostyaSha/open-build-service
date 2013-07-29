@@ -1,5 +1,5 @@
 [![Build Status](https://secure.travis-ci.org/openSUSE/open-build-service.png?branch=master)](https://travis-ci.org/openSUSE/open-build-service)
-[![Code Climate](https://codeclimate.com/badge.png)](https://codeclimate.com/github/openSUSE/open-build-service)
+[![Code Climate](https://codeclimate.com/github/openSUSE/open-build-service.png)](https://codeclimate.com/github/openSUSE/open-build-service)
 
 Open Build Service
 ==================
@@ -9,7 +9,8 @@ to build and distribute binary packages from sources in an automatic, consistent
 reproducible way. You can release packages as well as updates, add-ons, appliances and
 entire distributions for a wide range of operating systems and hardware architectures.
 
-More information can be found on [openbuildservice.org](http://www.openbuildservice.org)
+More information can be found on [openbuildservice.org](http://www.openbuildservice.org),
+including the official books for OBS.
 
 Organization
 ------------
@@ -24,11 +25,10 @@ organized like this:
 ###Directory Description
 
 	dist          Files relevant for (distro) packaging
-	docs          Documentation, examples and the Build Service book
+	docs          Documentation, examples and schema files
 	src/api       Api code (Ruby / Ruby on Rails)
 	src/backend   Backend code (Perl)
 	src/webui     Webui code (Ruby / Ruby on Rails)
-	shared        Stuff shared across the different parts
 
 Note that the three parts each also have their own documentation found in their
 respective subdirectories.
@@ -50,7 +50,7 @@ Please check the respective files for details.
 
 The Build Service project is hosted on [Github](http://github.com/opensuse/open-build-service)
 and you can discuss with the OBS Team via IRC on the channel
-[#openbuildservice](irc://freenode.net/openbuildservice). Or you can use our mailing list
+[#opensuse-buildservice](irc://freenode.net/opensuse-buildservice). Or you can use our mailing list
 [opensuse-buildservice@opensuse.org](mailto:opensuse-buildservice+subscribe@opensuse.org)
 
 > Your Open Build Service Team

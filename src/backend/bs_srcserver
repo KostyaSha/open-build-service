@@ -38,7 +38,7 @@ use Storable ();
 use Symbol;
 use MIME::Base64 ();
 
-use BSConfig;
+use BSConfiguration;
 use BSRPC ':https';
 use BSServer;
 use BSUtil;
@@ -2961,21 +2961,22 @@ sub getprojpack {
 		$expandedrepos{"$projid/$repoid"} = $@ if $@;
 		$path = $expandedrepos{"$projid/$repoid"};
 	      }
-	      my $c;
 	      eval {
 		die($path) unless ref $path;
-		$c = concatconfigs($projid, $repoid, $remotemap, @$path);
+		my $c = concatconfigs($projid, $repoid, $remotemap, @$path);
+	        $bconfs{$repoid} = Build::read_config($arch, [ split("\n", $c) ]);
 	      };
 	      if ($@) {
 	        my $err = $@;
-	        $err =~ s/\n$//;
-	        $rinfo->{'error'} = $err;
-	        next;
+	        chomp $err;
+	        $bconfs{$repoid} = {'error' => $err};
 	      }
-	      $c = [ split("\n", $c) ];
-	      $bconfs{$repoid} = Build::read_config($arch, $c);
             }
 	    my $conf = $bconfs{$repoid};
+	    if ($conf->{'error'}) {
+	      $rinfo->{'error'} = $conf->{'error'};
+	      next;
+	    }
 	    my $type = $conf->{'type'};
 	    if (!$type || $type eq 'UNDEFINED') {
 	      $rinfo->{'error'} = 'bad build configuration, no build type defined or detected';
@@ -3029,7 +3030,7 @@ sub getprojpack {
 	      if ($remotemap && $rinfo->{'path'} && !$repo->{'path'}) {
 		# simple way to fill the remote map
 		eval {
-		  concatconfigs($projid, $repoid, $remotemap, map {"$_->{'project'}/$_->{'repository'}"} @{$rinfo->{'path'}});
+		  concatconfigs($projid, $repoid, $remotemap, map {"$_->{'project'}/$_->{'repository'}"} grep {$_->{'project'} ne '_obsrepositories'} @{$rinfo->{'path'}});
 		};
 	      }
 	    } else {
@@ -3100,25 +3101,27 @@ sub getproject {
 #########################################################################
 
 sub pubkey2sslcert {
-  my ($projid, $pk) = @_;
+  my ($projid, $pubkeyfile, $signkeyfile) = @_;
   die("don't know how to generate a ssl cert\n") unless $BSConfig::sign;
   my $cert = '';
+  $pubkeyfile ||= "$projectsdir/$projid.pkg/_pubkey";
+  $signkeyfile ||= "$projectsdir/$projid.pkg/_signkey";
   my @signargs;
   push @signargs, '--project', $projid if $BSConfig::sign_project;
   local *F;
-  open(F, '-|', $BSConfig::sign, @signargs, '-P', "$projectsdir/$projid.pkg/_signkey", '-C', "$projectsdir/$projid.pkg/_pubkey") || die("$BSConfig::sign: $!\n");
+  open(F, '-|', $BSConfig::sign, @signargs, '-P', $signkeyfile, '-C', $pubkeyfile) || die("$BSConfig::sign: $!\n");
   1 while sysread(F, $cert, 4096, length($cert));
   close(F) || die("$BSConfig::sign: $?\n");
   return $cert;
 }
 
 sub updatesslcert {
-  my ($projid, $pubkey) = @_;
+  my ($projid, $pubkeyfile, $signkeyfile) = @_;
   my $rev = getrev_meta($projid, undef);
   return undef unless $rev;
   my $files = lsrev($rev);
   return undef unless $files->{'_sslcert'};
-  my $cert = pubkey2sslcert($projid, $pubkey);
+  my $cert = pubkey2sslcert($projid, $pubkeyfile, $signkeyfile);
   mkdir_p($uploaddir);
   writestr("$uploaddir/sslcert.$$", undef, $cert);
   return "$uploaddir/sslcert.$$";
@@ -3142,7 +3145,7 @@ sub createkey {
   die("sign did not create signkey\n") unless -s "$uploaddir/signkey.$$";
   mkdir_p("$projectsdir/$projid.pkg");
   writestr("$uploaddir/pubkey.$$", undef, $pubkey);
-  my $certfile = updatesslcert($projid, $pubkey);
+  my $certfile = updatesslcert($projid, "$uploaddir/pubkey.$$", "$uploaddir/signkey.$$");
   addrev_meta_multiple($cgi, $projid, undef, 'mrev',
 	[ "$uploaddir/pubkey.$$",  "$projectsdir/$projid.pkg/_pubkey",  '_pubkey' ],
 	[ "$uploaddir/signkey.$$", "$projectsdir/$projid.pkg/_signkey", '_signkey' ],
@@ -3166,7 +3169,7 @@ sub extendkey {
   close(F) || die("$BSConfig::sign: $?\n");
   mkdir_p($uploaddir);
   writestr("$uploaddir/pubkey.$$", undef, $pubkey);
-  my $certfile = updatesslcert($projid, $pubkey);
+  my $certfile = updatesslcert($projid, "$uploaddir/pubkey.$$");
   addrev_meta_multiple($cgi, $projid, undef, 'mrev',
 	[ "$uploaddir/pubkey.$$",  "$projectsdir/$projid.pkg/_pubkey",  '_pubkey' ],
 	[ $certfile, undef, '_sslcert' ]);
@@ -5951,6 +5954,7 @@ sub getbuildhistory {
 
 sub getbuildinfo {
   my ($cgi, $projid, $repoid, $arch, $packid) = @_;
+  $arch = $BSConfig::localarch if $arch eq 'local' && defined($BSConfig::localarch);
   checkprojrepoarch($projid, $repoid, $arch);
   my $reposerver = $BSConfig::partitioning ? projid2reposerver($projid) : $BSConfig::reposerver;
   my @args;
@@ -5963,6 +5967,7 @@ sub getbuildinfo {
 
 sub getbuildinfo_post {
   my ($cgi, $projid, $repoid, $arch, $packid) = @_;
+  $arch = $BSConfig::localarch if $arch eq 'local' && defined($BSConfig::localarch);
   checkprojrepoarch($projid, $repoid, $arch);
   my $reposerver = $BSConfig::partitioning ? projid2reposerver($projid) : $BSConfig::reposerver;
   my @args;
@@ -6035,6 +6040,14 @@ sub getworkerstatus {
     delete $_->{'uri'} for @{$ws->{'building'} || []};
     push @{$cws->{'idle'}}, @{$ws->{'idle'} || []};
     push @{$cws->{'building'}}, @{$ws->{'building'} || []};
+    for my $b (@{$ws->{'waiting'} || []}) {
+      my $ob = (grep {$_->{'arch'} eq $b->{'arch'}} @{$cws->{'waiting'} || []})[0];
+      if (!$ob) {
+        $ob = {'arch' => $b->{'arch'}, 'jobs' => 0};
+        push @{$cws->{'waiting'}}, $ob;
+      }
+      $ob->{'jobs'} += $b->{'jobs'};
+    }
     for my $b (@{$ws->{'blocked'} || []}) {
       my $ob = (grep {$_->{'arch'} eq $b->{'arch'}} @{$cws->{'blocked'} || []})[0];
       if (!$ob) {
@@ -6577,6 +6590,7 @@ sub pk2expire {
   my ($pk) = @_;
   # oh my! hard work!
   $pk =~ s/.*\n\n//s;
+  $pk =~ s/\n=.*/\n/s;
   $pk = MIME::Base64::decode($pk);
   return 0 unless $pk;
   my ($rex, $rct);

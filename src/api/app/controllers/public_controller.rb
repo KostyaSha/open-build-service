@@ -5,6 +5,17 @@ class PublicController < ApplicationController
   before_filter :extract_user_public
   skip_before_filter :extract_user
 
+  def extract_user_public
+    # to become _public_ special user
+    if ::Configuration.anonymous?
+      load_nobody
+      return true
+    end
+    logger.error "No public access is configured"
+    render_error( :message => "No public access is configured", :status => 401 )
+    return false
+  end
+
   def index
     redirect_to controller: "about", action: "index"
   end
@@ -27,7 +38,6 @@ class PublicController < ApplicationController
         false
       end
     end
-
     raise Package::UnknownObjectError, "#{project} / #{package} " unless allowed
   end
   private :check_package_access
@@ -113,17 +123,6 @@ class PublicController < ApplicationController
       pass_to_backend path
       return
     end
-  end
-
-  # GET /public/lastevents
-  def lastevents
-    path = unshift_public(request.path)
-    if not request.query_string.blank?
-      path += "?#{request.query_string}" 
-    elsif not request.env["rack.request.form_vars"].blank?
-      path += "?#{request.env["rack.request.form_vars"]}" 
-    end
-    pass_to_backend path
   end
 
   # GET /public/distributions

@@ -1938,7 +1938,7 @@ sub getoldpackages {
 }
 
 
-sub patchkiwi {
+sub patchproductkiwi {
   my ($buildinfo, $kiwifile, $meta) = @_;
 
   my $kiwi = readxml($kiwifile, $BSKiwiXML::kiwidesc);
@@ -1961,6 +1961,29 @@ sub patchkiwi {
   }
   $kiwi->{'instsource'}->{'productoptions'}->{'productvar'} = \@vars;
 
+  # expand obsrepositories:/ directive
+  my @rp;
+  for my $repository (@{$kiwi->{'instsource'}->{'instrepo'} || []}) {
+     if ($repository->{'source'}->{'path'} ne 'obsrepositories:/') {
+        push @rp, $repository;
+        next;
+     }
+     # fill in pathes from buildinfo instead
+     my $counter = 0;
+     for my $path (@{$buildinfo->{'path'} || []}) {
+        my $h = { 'source' => { 'path' => "obs://$path->{'project'}/$path->{'repository'}" } };
+        $h->{'priority'} = $repository->{'priority'} if $repository->{'priority'};
+        $h->{'local'} = $repository->{'local'} if $repository->{'local'};
+        if ($repository->{'name'}) {
+          $counter = $counter + 1;
+          $h->{'name'} = "$repository->{'name'}_$counter";
+        }
+        push @rp, $h;
+     }
+  }
+  $kiwi->{'instsource'}->{'instrepo'} = \@rp if @rp;
+
+  # expand a "take all packages" for products
   for my $repopackages (@{$kiwi->{'instsource'}->{'repopackages'} || []}) {
     next unless grep {$_->{'name'} eq '*'} @{$repopackages->{'repopackage'} || []};
     # hey, a substitute all modifier!
@@ -2128,8 +2151,9 @@ sub dobuild {
   writestr("$buildroot/.build.config", undef, $config);
 
   my $release = $buildinfo->{'release'};
-  my $obsinstance = $BSConfig::obsname || '';
-  my $disturl = "obs://$obsinstance/$projid/$repoid/$buildinfo->{'srcmd5'}-$packid";
+  #FIXME2.6: drop the following line
+  my $disturl = "obs://$BSConfig::obsname/$projid/$repoid/$buildinfo->{'srcmd5'}-$packid";
+  $disturl = $buildinfo->{'disturl'} if $buildinfo->{'disturl'};
 
   my @args;
   push @args, $helper if $helper;
@@ -2168,8 +2192,8 @@ sub dobuild {
 
   print "building...\n";
 
-  if ($kiwimode && $buildinfo->{'imagetype'} && $buildinfo->{'imagetype'}->[0] eq 'product') {
-    patchkiwi($buildinfo, "$srcdir/$buildinfo->{'file'}", \@meta);
+  if ($buildinfo->{'imagetype'} && $buildinfo->{'imagetype'}->[0] eq 'product') {
+    patchproductkiwi($buildinfo, "$srcdir/$buildinfo->{'file'}", \@meta);
   }
 
   push @args, "$statedir/build/build";
@@ -2224,6 +2248,33 @@ sub dobuild {
   push @args, '--linksources' if $localkiwi;
   push @args, '--signdummy' if $kiwimode && $buildinfo->{'imagetype'} && $buildinfo->{'imagetype'}->[0] eq 'product' && -e "$statedir/build/signdummy";
   push @args, "$srcdir/$buildinfo->{'file'}";
+  if ($buildinfo->{'file'} =~ /\.kiwi$/ && $buildinfo->{'imagetype'}->[0] ne 'product') {
+    # expand obsrepositories:/ directive for appliances
+    my @rp=();
+    my $kiwi = Build::parse(undef, "$srcdir/$buildinfo->{'file'}");
+    my @kiwiargs;
+    my $use_parameters;
+    push @kiwiargs, '--kiwi-parameter', '--ignore-repos';
+    for my $path (@{$kiwi->{'path'} || []}) {
+       if ($path->{'project'} ne '_obsrepositories') {
+          my $repo = "repos/$path->{'project'}/$path->{'repository'}";
+          push @kiwiargs, '--kiwi-parameter', '--add-repo', '--kiwi-parameter', $repo;
+          push @kiwiargs, '--kiwi-parameter', '--add-repotype', '--kiwi-parameter', "rpm-md";
+          push @kiwiargs, '--kiwi-parameter', '--add-repoprio', '--kiwi-parameter', $path->{'priority'} || 0;
+          next;
+       }
+       # fill in pathes from buildinfo instead
+       $use_parameters = 1;
+       for my $prjpath (@{$buildinfo->{'path'} || []}) {
+          my $repo ="repos/$prjpath->{'project'}/$prjpath->{'repository'}";
+          $repo =~ s/:/:\//g;
+          push @kiwiargs, '--kiwi-parameter', '--add-repo', '--kiwi-parameter', $repo;
+          push @kiwiargs, '--kiwi-parameter', '--add-repotype', '--kiwi-parameter', "rpm-md";
+          push @kiwiargs, '--kiwi-parameter', '--add-repoprio', '--kiwi-parameter', $path->{'priority'} || 0;
+       }
+    }
+     @args = ( @args, @kiwiargs ) if $use_parameters;
+  }
   qsystem(@args);
 
   print "\n";
@@ -2485,6 +2536,7 @@ while (!BSServer::server($conf)) {
       my $kill_job;
       $kill_job = "kvm memory page bug" if $tail =~ /BUG: unable to handle kernel NULL pointer dereference at/;
       $kill_job = "kvm spinnlock bug" if $tail =~ /INFO: rcu_sched self-detected stall on CPU/;
+      $kill_job = "xen soft lockup" if $tail =~ /BUG: soft lockup - CPU#\d+ stuck for/;
       if ($kill_job) {
         next unless $locked;
 	print "detected $kill_job, discarding job\n";

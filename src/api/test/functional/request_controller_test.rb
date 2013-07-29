@@ -79,8 +79,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     # sneak in a test case for the status controller
     get "/status/bsrequest?id=#{id}"
     node = Xmlhash.parse(@response.body)
-    assert_equal({
-                     'id' => id,
+    assert_equal({'id' => id,
                      'repository' =>
                          {'name' => '10.2',
                           'arch' =>
@@ -593,40 +592,40 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
                   "description" => nil,
                   "state" => "review",
                   "creator" => "Iggy",
-                  "created_at" => "2010-07-12T00:00:00Z",
+                  "created_at" => "2010-07-12T00:00:00.000Z",
                   "is_target_maintainer" => false,
                   "my_open_reviews" =>
                       [{"by_user" => "tom",
-                        "when" => "2010-07-12T00:00:03Z",
+                        "when" => "2010-07-12T00:00:03.000Z",
                         "who" => "tom",
                         "state" => "new"}],
                   "other_open_reviews" => [],
                   "events" =>
                       [{"who" => "Iggy",
                         "what" => "created request",
-                        "when" => "2010-07-12T00:00:00Z",
+                        "when" => "2010-07-12T00:00:00.000Z",
                         "comment" => nil},
                        {"who" => "Iggy",
                         "what" => "added review",
-                        "when" => "2010-07-12T00:00:01Z",
+                        "when" => "2010-07-12T00:00:01.000Z",
                         "comment" => "couldyou"},
                        {"who" => "tom",
                         "what" => "accepted review",
-                        "when" => "2010-07-12T00:00:02Z",
+                        "when" => "2010-07-12T00:00:02.000Z",
                         "comment" => "review1",
                         "color" => "green"},
                        {"who" => "Iggy",
                         "what" => "added review",
-                        "when" => "2010-07-12T00:00:03Z",
+                        "when" => "2010-07-12T00:00:03.000Z",
                         "comment" => "overlooked"},
                        {"who" => "tom",
                         "what" => "accepted review",
-                        "when" => "2010-07-12T00:00:04Z",
+                        "when" => "2010-07-12T00:00:04.000Z",
                         "comment" => "review2",
                         "color" => "green"},
                        {"who" => "tom",
                         "what" => "reopened review",
-                        "when" => "2010-07-12T00:00:05Z",
+                        "when" => "2010-07-12T00:00:05.000Z",
                         "comment" => "reopen2",
                         "color" => "maroon"}],
                   "actions" =>
@@ -1461,6 +1460,12 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
     # reopen the review
     prepare_request_with_user "tom", "thunder"
+    post "/request/#{id}?cmd=changereviewstate&newstate=new&by_group=INEXISTENT"
+    assert_response 404
+    assert_xml_tag(:tag => "status", :attributes => {:code => 'not_found'})
+    post "/request/#{id}?cmd=changereviewstate&newstate=new&by_user=INEXISTENT"
+    assert_response 404
+    assert_xml_tag(:tag => "status", :attributes => {:code => 'not_found'})
     post "/request/#{id}?cmd=changereviewstate&newstate=new&by_project=home:coolo:test&by_package=kdelibs_DEVEL_package", nil
     assert_response :success
     get "/request/#{id}"
@@ -2080,6 +2085,24 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
           </request>"
     post "/request?cmd=create", req
     assert_response 400
+    assert_xml_tag(:tag => "status", :attributes => {:code => "invalid_record"})
+  end
+
+  def test_invalid_cleanup_use
+    prepare_request_with_user "Iggy", "asdfasdf"
+
+    req = "<request>
+            <action type='submit'>
+              <source project='home:Iggy' package='TestPack' />
+              <target project='home:Iggy' package='TestPack' />
+              <options>
+                <sourceupdate>cleanup</sourceupdate>
+              </options>
+            </action>
+            <description/>
+            <state who='Iggy' name='new'/>
+          </request>"
+    post "/request?cmd=create", req
     assert_xml_tag(:tag => "status", :attributes => {:code => "invalid_record"})
   end
 

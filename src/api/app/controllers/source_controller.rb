@@ -20,6 +20,7 @@ class SourceController < ApplicationController
   validate_action :package_meta => {:method => :put, :request => :package, :response => :status}
 
   skip_before_filter :validate_xml_request, :only => [:file]
+  skip_before_filter :extract_user, only: [:lastevents_public]
 
   # /source
   #########
@@ -59,7 +60,7 @@ class SourceController < ApplicationController
 
   def projectlist
     # list all projects (visible to user)
-    dir = Project.select(:name).all.map {|i| i.name }.sort
+    dir = Project.pluck(:name).sort
     output = String.new
     output << "<?xml version='1.0' encoding='UTF-8'?>\n"
     output << "<directory>\n"
@@ -110,12 +111,16 @@ class SourceController < ApplicationController
             if params.has_key? :expand
               packages = pro.expand_all_packages
             else
-              packages = pro.packages
+              packages = pro.packages.pluck(:name, :db_project_id)
             end
-            packages = packages.sort{|a,b| a.name<=>b.name}
+            packages = packages.sort{|a,b| a[0]<=>b[0] }
+            prj_names = Hash.new
+            Project.where(id: packages.map {|a| a[1]}.uniq).pluck(:id, :name).each do |id, name|
+              prj_names[id] = name
+            end 
             output = String.new
             output << "<directory count='#{packages.length}'>\n"
-            output << packages.map { |p| p.db_project_id==pro.id ? "  <entry name=\"#{p.name}\"/>\n" : "  <entry name=\"#{p.name}\" originproject=\"#{p.project.name}\"/>\n" }.join
+            output << packages.map { |p| p[1]==pro.id ? "  <entry name=\"#{p[0]}\"/>\n" : "  <entry name=\"#{p[0]}\" originproject=\"#{prj_names[p[1]]}\"/>\n" }.join
             output << "</directory>\n"
             render :text => output, :content_type => "text/xml"
           end
@@ -1198,15 +1203,18 @@ class SourceController < ApplicationController
     end
   end
 
+  # POST, GET /public/lastevents
   # GET /lastevents
+  def lastevents_public
+    lastevents
+  end
+
+  # POST /lastevents
   def lastevents
-    path = request.path
-    if not request.query_string.blank?
-      path += "?#{request.query_string}"
-    elsif not request.env["rack.request.form_vars"].blank?
-      path += "?#{request.env["rack.request.form_vars"]}"
-    end
-    pass_to_backend path
+    path = get_request_path
+
+    # map to a GET, so we can X-forward it
+    forward_from_backend path
   end
 
   private

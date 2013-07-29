@@ -2,6 +2,7 @@ require File.expand_path(File.dirname(__FILE__) + "/..") + "/test_helper"
 
 require 'benchmark'
 require 'nokogiri'
+require 'home_controller'
 
 class SpiderTest < ActionDispatch::IntegrationTest
 
@@ -33,8 +34,10 @@ class SpiderTest < ActionDispatch::IntegrationTest
       next if link =~ %r{/mini-profiler-resources}
       # that link is just a top ref
       next if link.end_with? "/package/rdiff"
-      # no idea where this link comes from
-      next if link.end_with? "/package/show?project=HiddenRemoteInstance"
+      # admin can see even the hidden
+      next if link.end_with? "/package/show/HiddenRemoteInstance"
+      next if link.end_with? "/project/show/HiddenRemoteInstance"
+      next if link.end_with? "/project/show/RemoteInstance"
       unless @pages_visited.has_key? link
         @pages_to_visit[link] ||= [baseuri.to_s, tag.content]
       end
@@ -43,25 +46,25 @@ class SpiderTest < ActionDispatch::IntegrationTest
 
   def raiseit(message, url)
     # known issues
-    return if url =~ %r{/package/binary\?.*project=BinaryprotectedProject}
-    return if url =~ %r{/package/statistics\?.*project=BinaryprotectedProject}
-    return if url.end_with? "/package/binary?arch=i586&filename=package-1.0-1.src.rpm&package=pack&project=SourceprotectedProject&repository=repo"
-    return if url.end_with? "/package/revisions?package=pack&project=SourceprotectedProject"
-    return if url.end_with? "/package/revisions?package=target&project=SourceprotectedProject"
-    return if url.end_with? "/package/show?package=kdelibs&project=kde4&rev=1"
-    return if url.end_with? "/package/show?package=target&project=SourceprotectedProject"
-    return if url.end_with? "/package/users?package=pack&project=SourceprotectedProject"
-    return if url.end_with? "/package/view_file?file=my_file&package=pack2&project=BaseDistro%3AUpdate&rev=1"
-    return if url.end_with? "/package/view_file?file=my_file&package=pack2&project=Devel%3ABaseDistro%3AUpdate&rev=1"
-    return if url.end_with? "/package/view_file?file=my_file&package=pack3&project=Devel%3ABaseDistro%3AUpdate&rev=1"
-    return if url.end_with? "/package/view_file?file=my_file&package=remotepackage&project=LocalProject&rev=1"
-    return if url.end_with? "/package/view_file?file=myfile&package=pack2.linked&project=BaseDistro2.0%3ALinkedUpdateProject&rev=1"
-    return if url.end_with? "/package/view_file?file=myfile&package=pack2.linked&project=BaseDistro2.0&rev=1"
-    return if url.end_with? "/package/view_file?file=package.spec&package=pack2.linked&project=BaseDistro2.0%3ALinkedUpdateProject&rev=1"
-    return if url.end_with? "/package/view_file?file=package.spec&package=pack2.linked&project=BaseDistro2.0&rev=1"
-    return if url.end_with? "/project/edit?project=RemoteInstance"
-    return if url.end_with? "/project/meta?project=HiddenRemoteInstance"
-    return if url.end_with? "/project/show?project=HiddenRemoteInstance"
+    return if url =~ %r{/package/binary/BinaryprotectedProject/.*}
+    return if url =~ %r{/package/statistics/BinaryprotectedProject/.*}
+    return if url.end_with? "/package/binary/SourceprotectedProject/pack?arch=i586&filename=package-1.0-1.src.rpm&repository=repo"
+    return if url =~ %r{/package/revisions/SourceprotectedProject.*}
+    return if url.end_with? "/package/show/kde4/kdelibs?rev=1"
+    return if url.end_with? "/package/show/SourceprotectedProject/target"
+    return if url.end_with? "/package/users/SourceprotectedProject/pack"
+    return if url.end_with? "/package/view_file/BaseDistro:Update/pack2?file=my_file&rev=1"
+    return if url.end_with? "/package/view_file/Devel:BaseDistro:Update/pack2?file=my_file&rev=1"
+    return if url.end_with? "/package/view_file/Devel:BaseDistro:Update/pack3?file=my_file&rev=1"
+    return if url.end_with? "/package/view_file/LocalProject/remotepackage?file=my_file&rev=1"
+    return if url.end_with? "/package/view_file/BaseDistro2.0:LinkedUpdateProject/pack2.linked?file=myfile&rev=1"
+    return if url.end_with? "/package/view_file/BaseDistro2.0/pack2.linked?file=myfile&rev=1"
+    return if url.end_with? "/package/view_file/BaseDistro2.0:LinkedUpdateProject/pack2.linked?file=package.spec&rev=1"
+    return if url.end_with? "/package/view_file/BaseDistro2.0/pack2.linked?file=package.spec&rev=1"
+    return if url.end_with? "/project/edit/RemoteInstance"
+    return if url.end_with? "/project/meta/HiddenRemoteInstance"
+    return if url.end_with? "/project/show/HiddenRemoteInstance"
+    return if url.end_with? "/project/edit/HiddenRemoteInstance"
 
     $stderr.puts "Found #{message} on #{url}, crawling path"
     indent = ' '

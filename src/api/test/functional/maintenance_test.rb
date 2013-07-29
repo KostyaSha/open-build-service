@@ -1290,7 +1290,8 @@ class MaintenanceTests < ActionDispatch::IntegrationTest
     assert_equal "package(x86-64)", pac["format"]["rpm:provides"]['rpm:entry'][2]['name']
     assert_equal "something", pac["format"]["rpm:conflicts"]['rpm:entry']['name']
     assert_equal "old_crap", pac["format"]["rpm:obsoletes"]['rpm:entry']['name']
-    if File.exist? "/etc/SuSE-release"
+    if File.exist? "/etc/init.d/boot.local"
+      # seems to be a SUSE system
       assert_equal "pure_optional", pac["format"]["rpm:suggests"]['rpm:entry']['name']
       assert_equal "would_be_nice", pac["format"]["rpm:recommends"]['rpm:entry']['name']
       assert_equal "other_package_likes_it", pac["format"]["rpm:supplements"]['rpm:entry']['name']
@@ -1301,7 +1302,7 @@ class MaintenanceTests < ActionDispatch::IntegrationTest
        hashed = Xmlhash.parse(io.read)
     end
     #STDERR.puts JSON.pretty_generate(hashed)
-    assert_equal "/my_packaged_file", hashed["package"][0]["file"]
+    assert hashed["package"].map{|f| f["file"]}.include? "/my_packaged_file"
 
     # verify that local linked packages still get branched correctly
     post "/source/BaseDistro2.0/pack2", :cmd => "branch"
@@ -1372,12 +1373,8 @@ class MaintenanceTests < ActionDispatch::IntegrationTest
   def test_create_invalid_patchinfo
     prepare_request_with_user "tom", "thunder"
     # collons in patchinfo names are not allowed but common mistake
-    post "https://api.opensuse.org/source/home:tom?cmd=createpatchinfo&force=1&name=home:tom"
-    assert_response 404
-    assert_xml_tag :tag => "status", :attributes => { :code => "invalid_package_name" }
-
-    post "https://api.opensuse.org/source/home:tom?cmd=createpatchinfo&force=1&name=home:tom"
-    assert_response 404
+    post "/source/home:tom?cmd=createpatchinfo&force=1&name=home:tom"
+    assert_response 400
     assert_xml_tag :tag => "status", :attributes => { :code => "invalid_package_name" }
   end
 

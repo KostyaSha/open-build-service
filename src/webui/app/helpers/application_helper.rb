@@ -33,7 +33,8 @@ module ActionView
       @@icon_cache[_source] = source
     end
 
-    def compute_asset_host(source)
+    # TODO try to port this
+    def compute_asset_host_TODO(source)
       if CONFIG['use_static'] 
         if ActionController::Base.relative_url_root
           source = source.slice(ActionController::Base.relative_url_root.length..-1)
@@ -426,7 +427,7 @@ module ApplicationHelper
       return next_codemirror_uid
     end
     @codemirror_editor_setup = 0
-    opts.reverse_merge!({ read_only: false, no_border: false, width: 'auto', height: '660px' })
+    opts.reverse_merge!({ read_only: false, no_border: false, width: 'auto' })
 
     content_for(:content_for_head, javascript_include_tag('cm2'))
     style = ''
@@ -462,10 +463,12 @@ module ApplicationHelper
   def remove_dialog_tag(text)
     link_to(text, "#", title: 'Remove Dialog', id: 'remove_dialog')
   end
-   
-  def render_dialog
-    check_ajax 
+
+  # dialog_init is a function name called before dialog is shown
+  def render_dialog(dialog_init = nil)
+    check_ajax
     @dialog_html = escape_javascript( render_to_string(partial: @current_action.to_s) )
+    @dialog_init = dialog_init
     render partial: 'dialog', content_type: 'application/javascript'
   end
 

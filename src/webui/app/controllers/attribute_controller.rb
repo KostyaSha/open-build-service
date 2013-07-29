@@ -43,8 +43,7 @@ class AttributeController < ApplicationController
       @attributes.save
       redirect_to opt, notice: "Attribute sucessfully added!"
     rescue ActiveXML::Transport::Error => e
-      flash[:error] = "Saving attribute failed: #{e.summary}"
-      redirect_to opt
+      redirect_to opt, error: "Saving attribute failed: #{e.summary}"
     end
   end
 
@@ -73,7 +72,11 @@ private
     end
     if @project.is_remote?
        flash[:error] = "Attribute access to remote project is not yet supported"
-       redirect_to :controller => "package", :action => :show, :project => params[:project], :package => params[:package]
+       if params[:package].blank?
+         redirect_to controller: :project, action: :show, project: params[:project]
+       else
+         redirect_to controller: :package, action: :show, project: params[:project], package: params[:package]
+       end
        return
     end
     @is_maintenance_project = false

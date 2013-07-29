@@ -1,4 +1,4 @@
-require 'opensuse/backend'
+require_dependency 'opensuse/backend'
 
 class Project < ActiveRecord::Base
   include FlagHelper
@@ -19,6 +19,9 @@ class Project < ActiveRecord::Base
   class SaveError < APIException
     setup "project_save_error"
   end
+  class WritePermissionError < APIException
+    setup "project_write_permission_error"
+  end
   class ForbiddenError < APIException
     setup("change_project_protection_level", 403,
           "admin rights are required to raise the protection level of a project (it won't be safe anyway)")
@@ -32,13 +35,13 @@ class Project < ActiveRecord::Base
   has_many :project_user_role_relationships, :dependent => :delete_all, foreign_key: :db_project_id
   has_many :project_group_role_relationships, :dependent => :delete_all, foreign_key: :db_project_id
 
-  has_many :packages, :dependent => :destroy, foreign_key: :db_project_id
+  has_many :packages, :dependent => :destroy, foreign_key: :db_project_id, inverse_of: :project
   has_many :attribs, :dependent => :destroy, foreign_key: :db_project_id
   has_many :repositories, :dependent => :destroy, foreign_key: :db_project_id
   has_many :messages, :as => :db_object, :dependent => :delete_all
   has_many :watched_projects, :dependent => :destroy
 
-  has_many :linkedprojects, :order => :position, :class_name => "LinkedProject", foreign_key: :db_project_id
+  has_many :linkedprojects, -> { order(:position) }, :class_name => "LinkedProject", foreign_key: :db_project_id
 
   has_many :taggings, :as => :taggable, :dependent => :delete_all
   has_many :tags, :through => :taggings
@@ -58,8 +61,6 @@ class Project < ActiveRecord::Base
 
   has_many  :develprojects, :class_name => "Project", :foreign_key => 'develproject_id'
   belongs_to :develproject, :class_name => "Project"
-
-  attr_accessible :name, :title, :description
 
   default_scope { where("projects.id not in (?)", ProjectUserRoleRelationship.forbidden_project_ids ) }
 
@@ -222,7 +223,6 @@ class Project < ActiveRecord::Base
       return dbp
     end
 
-
     def find_by_attribute_type( attrib_type )
       return Project.joins(:attribs).where(:attribs => { :attrib_type_id => attrib_type.id })
     end
@@ -246,6 +246,16 @@ class Project < ActiveRecord::Base
         return lpro, remote_project unless lpro.nil? or lpro.remoteurl.nil?
       end
       return nil
+    end
+
+  end
+
+  def check_write_access!
+    return if Rails.env.test? and User.current.nil? # for unit tests
+
+    # the can_create_check is inconsistent with package class check_write_access! check
+    unless User.current.can_modify_project?(self) || User.current.can_create_project?(self.name)
+      raise WritePermissionError, "No permission to modify project '#{self.name}' for user '#{User.current.login}'"
     end
   end
 
@@ -291,6 +301,8 @@ class Project < ActiveRecord::Base
   end
 
   def update_from_xml(xmlhash, force=nil)
+    check_write_access!
+
     # check for raising read access permissions, which can't get ensured atm
     unless self.new_record? || self.disabled_for?('access', nil, nil)
       if FlagHelper.xml_disabled_for?(xmlhash, 'access')
@@ -303,7 +315,7 @@ class Project < ActiveRecord::Base
       end
     end
     new_record = self.new_record?
-    if CONFIG['default_access_disabled'] == true and not new_record
+    if ::Configuration.first.default_access_disabled == true and not new_record
       if self.disabled_for?('access', nil, nil) and not FlagHelper.xml_disabled_for?(xmlhash, 'access')
         raise ForbiddenError.new
       end
@@ -504,7 +516,7 @@ class Project < ActiveRecord::Base
     
     #--- update flag group ---#
     update_all_flags( xmlhash )
-    if CONFIG['default_access_disabled'] == true and new_record
+    if ::Configuration.first.default_access_disabled == true and new_record
       # write a default access disable flag by default in this mode for projects if not defined
       unless xmlhash.elements('access').length > 0
         self.flags.new(:status => 'disable', :flag => 'access')
@@ -679,13 +691,13 @@ class Project < ActiveRecord::Base
       logger.debug "offending repo: #{object.inspect}"
       unless force
         #find repositories that link against this one and issue warning if found
-        list = PathElement.where(repository_id: object.id).all
+        list = PathElement.where(repository_id: object.id)
         error = ""
         unless list.empty?
           linking_repos = list.map {|x| x.repository.project.name+"/"+x.repository.name}.join "\n"
           error << "Repository #{self.name}/#{name} cannot be deleted because following repos link against it:\n"+linking_repos
         end
-        list = ReleaseTarget.where(target_repository_id: object.id).all
+        list = ReleaseTarget.where(target_repository_id: object.id)
         unless list.empty?
           linking_repos = list.map {|x| x.repository.project.name+"/"+x.repository.name}.join "\n"
           error << "Repository #{self.name}/#{name} cannot be deleted because following repos define it as release target:/\n"+linking_repos
@@ -745,6 +757,9 @@ class Project < ActiveRecord::Base
     end
     if atype.value_count and atype.value_count > 0 and not attrib.has_element? :value
       raise SaveError, "attribute '#{attrib.namespace}:#{attrib.name}' requires #{atype.value_count} values, but none given"
+    end
+    if attrib.has_element? :issue and not atype.issue_list
+      raise SaveError, "attribute '#{attrib.namespace}:#{attrib.name}' has issue elements which are not allowed in this attribute"
     end
 
     # verify with allowed values for this attribute definition
@@ -844,6 +859,11 @@ class Project < ActiveRecord::Base
         type_name = attr.attrib_type.attrib_namespace.name+":"+attr.attrib_type.name
         a.attribute(:name => attr.attrib_type.name, :namespace => attr.attrib_type.attrib_namespace.name) do |y|
           done[type_name]=1
+          if attr.issues.length>0
+            attr.issues.each do |ai|
+              y.issue(:name => ai.issue.name, :tracker => ai.issue.issue_tracker.name)
+            end
+          end
           if attr.values.length>0
             attr.values.each do |val|
               y.value(val.value)
@@ -886,6 +906,8 @@ class Project < ActiveRecord::Base
   end
 
   def add_user( user, role )
+    check_write_access!
+
     unless role.kind_of? Role
       role = Role.get_by_title(role)
     end
@@ -906,6 +928,8 @@ class Project < ActiveRecord::Base
   end
 
   def add_group( group, role )
+    check_write_access!
+
     unless role.kind_of? Role
       role = Role.get_by_title(role)
     end
@@ -926,23 +950,19 @@ class Project < ActiveRecord::Base
   end
 
   def each_user( opt={}, &block )
-    users = project_user_role_relationships.joins(:role, :user).select("users.login as login, roles.title as roletitle")
-    if( block )
-      users.each do |u|
-        block.call(u.login, u.roletitle)
-      end
+    raise "No block given" unless block
+    users = project_user_role_relationships.joins(:role, :user).order("roles.title, users.login").pluck("users.login, roles.title")
+    users.each do |login, title|
+      block.call(login, title)
     end
-    return users
   end
 
   def each_group( opt={}, &block )
-    groups = project_group_role_relationships.joins(:role, :group).select("groups.title as grouptitle, roles.title as roletitle")
-    if( block )
-      groups.each do |g|
-        block.call(g.grouptitle, g.roletitle)
-      end
+    raise "No block given" unless block
+    groups = project_group_role_relationships.joins(:role, :group).order("groups.title, roles.title").pluck("groups.title as grouptitle, roles.title as roletitle")
+    groups.each do |group, role|
+      block.call(group, role)
     end
-    return groups
   end
 
   def to_axml(view = nil)
@@ -1031,8 +1051,8 @@ class Project < ActiveRecord::Base
             end
             r.path( :project => project_name, :repository => pe.link.name )
           end
-          repo.repository_architectures.joins(:architecture).select("architectures.name").each do |arch|
-            r.arch arch.name
+          repo.repository_architectures.joins(:architecture).pluck("architectures.name").each do |arch|
+            r.arch arch
           end
         end
       end
@@ -1143,7 +1163,7 @@ class Project < ActiveRecord::Base
   def expand_flags(pkg = nil)
     ret = Hash.new
    
-    repos = repositories.not_remote.all 
+    repos = repositories.not_remote
 
     FlagHelper.flag_types.each do |flag_name|
       pkg_flags = nil
@@ -1171,7 +1191,7 @@ class Project < ActiveRecord::Base
   end
 
   def complex_status(backend)
-    ProjectStatusHelper.calc_status(self, backend)
+    ProjectStatusHelper.calc_status(self)
   end
 
   # find a package in a project and its linked projects
@@ -1238,19 +1258,20 @@ class Project < ActiveRecord::Base
     return projects
   end
 
+  # return array of [:name, :project_id] tuples
   def expand_all_packages
-    packages = self.packages.select([:name,:db_project_id])
+    packages = self.packages.pluck([:name,:db_project_id])
     p_map = Hash.new
-    packages.each { |i| p_map[i.name] = 1 } # existing packages map
+    packages.each { |name, prjid| p_map[name] = 1 } # existing packages map
     # second path, all packages from indirect linked projects
     self.linkedprojects.each do |lp|
       if lp.linked_db_project.nil?
         # FIXME: this is a remote project
       else
-        lp.linked_db_project.expand_all_packages.each do |p|
-          unless p_map[p.name]
-            packages << p
-            p_map[p.name] = 1
+        lp.linked_db_project.expand_all_packages.each do |name, prj_id|
+          unless p_map[name]
+            packages << [name, prj_id]
+            p_map[name] = 1
           end
         end
       end
@@ -1323,6 +1344,7 @@ class Project < ActiveRecord::Base
 
     return m
   end
+
   private :extract_maintainer
 
   def lookup_package_owner(pkg, owner, limit, devel, filter, deepest, already_checked={})
@@ -1354,6 +1376,7 @@ class Project < ActiveRecord::Base
     # found entry
     return m, (limit-1), already_checked
   end
+
   private :lookup_package_owner
 
   def find_containers_without_definition(devel=true, filter=["maintainer","bugowner"] )
@@ -1366,9 +1389,9 @@ class Project < ActiveRecord::Base
 
     # fast find packages with defintions
     # user in package object
-    defined_packages = Package.joins(:package_user_role_relationships).where("db_project_id in (?) AND package_user_role_relationships.role_id in (?)", projects, roles).select(:name).map{ |p| p.name}
+    defined_packages = Package.joins(:package_user_role_relationships).where("db_project_id in (?) AND package_user_role_relationships.role_id in (?)", projects, roles).pluck(:name)
     # group in package object
-    defined_packages += Package.joins(:package_group_role_relationships).where("db_project_id in (?) AND package_group_role_relationships.role_id in (?)", projects, roles).select(:name).map{ |p| p.name}
+    defined_packages += Package.joins(:package_group_role_relationships).where("db_project_id in (?) AND package_group_role_relationships.role_id in (?)", projects, roles).pluck(:name)
     # user in project object
     Project.joins(:project_user_role_relationships).where("projects.id in (?) AND project_user_role_relationships.role_id in (?)", projects, roles).each do |prj|
       defined_packages += prj.packages.map{ |p| p.name }
@@ -1382,7 +1405,7 @@ class Project < ActiveRecord::Base
     end
     defined_packages.uniq!
 
-    all_packages = Package.where("db_project_id in (?)", projects).select(:name).map{ |p| p.name}
+    all_packages = Package.where("db_project_id in (?)", projects).pluck(:name)
   
     undefined_packages = all_packages - defined_packages 
     maintainers=[]
@@ -1416,14 +1439,14 @@ class Project < ActiveRecord::Base
     # fast find packages with defintions
     if owner.class == User
       # user in package object
-      found_packages = PackageUserRoleRelationship.where(:role_id => roles, :bs_user_id => owner, :db_package_id => Package.where(:db_project_id => projects)).select(:db_package_id).map{ |p| p.db_package_id}
+      found_packages = PackageUserRoleRelationship.where(:role_id => roles, :bs_user_id => owner, :db_package_id => Package.where(:db_project_id => projects)).pluck(:db_package_id)
       # user in project object
       ProjectUserRoleRelationship.where(:role_id => roles, :bs_user_id => owner, :db_project_id => Project.where(:id => projects)).each do |prjrel|
         found_projects << prjrel.db_project_id
       end
     elsif owner.class == Group
       # group in package object
-      found_packages = PackageGroupRoleRelationship.where(:role_id => roles, :bs_group_id => owner, :db_package_id => Package.where(:db_project_id => projects)).select(:db_package_id).map{ |p| p.db_package_id}
+      found_packages = PackageGroupRoleRelationship.where(:role_id => roles, :bs_group_id => owner, :db_package_id => Package.where(:db_project_id => projects)).pluck(:db_package_id)
       # group in project object
       ProjectGroupRoleRelationship.where(:role_id => roles, :bs_group_id => owner, :db_project_id => Project.where(:id => projects)).each do |prjrel|
         found_projects << prjrel.db_project_id
@@ -1517,6 +1540,8 @@ class Project < ActiveRecord::Base
   end
 
   def set_project_type(project_type_name)
+    check_write_access!
+
     mytype = DbProjectType.find_by_name(project_type_name)
     return false unless mytype
     self.type_id = mytype.id
@@ -1529,6 +1554,8 @@ class Project < ActiveRecord::Base
   end
 
   def set_maintenance_project(project)
+    check_write_access!
+
     if project.class == Project
       self.maintenance_project_id = project.id
       self.save!
@@ -1548,23 +1575,23 @@ class Project < ActiveRecord::Base
     # Includes also requests for packages contained in this project
     rel = BsRequest.where(state: [:new, :review, :declined]).joins(:bs_request_actions)
     rel = rel.where("bs_request_actions.source_project = ? or bs_request_actions.target_project = ?", self.name, self.name)
-    return BsRequest.where(id: rel.select("bs_requests.id").all.map { |r| r.id})
+    return BsRequest.where(id: rel.pluck("bs_requests.id"))
   end
 
   def open_requests_with_by_project_review
     # Includes also by_package reviews for packages contained in this project
     rel = BsRequest.where(state: [:new, :review])
     rel = rel.joins(:reviews).where("reviews.state = 'new' and reviews.by_project = ? ", self.name)
-    return BsRequest.where(id: rel.select("bs_requests.id").all.map { |r| r.id})
+    return BsRequest.where(id: rel.pluck("bs_requests.id"))
   end
 
   # list only the repositories that have a target project in the build path
   # the function uses the backend for informations (TODO)
-  def repositories_linking_project(tproj, backend)
+  def repositories_linking_project(tproj)
     tocheck_repos = Array.new
 
-    targets = bsrequest_repos_map(tproj.name, backend)
-    sources = bsrequest_repos_map(self.name, backend)
+    targets = bsrequest_repos_map(tproj.name)
+    sources = bsrequest_repos_map(self.name)
     sources.each do |key, value|
       if targets.has_key?(key)
         tocheck_repos << sources[key]
@@ -1577,18 +1604,20 @@ class Project < ActiveRecord::Base
 
   # called either directly or from delayed job
   def do_project_copy( params )
+    # set user if nil, needed for delayed job in Package model
+    User.current ||= User.find_by_login(params[:user])
+
+    check_write_access!
+
     # copy entire project in the backend
     begin
       path = "/source/#{URI.escape(self.name)}"
       path << Suse::Backend.build_query_from_hash(params, [:cmd, :user, :comment, :oproject, :withbinaries, :withhistory, :makeolder])
       Suse::Backend.post path, nil
-    rescue Suse::Backend::HTTPError => e
-      logger.debug "copy failed: #{e.message}"
+    rescue ActiveXML::Transport::Error => e
+      logger.debug "copy failed: #{e.summary}"
       # we need to check results of backend in any case (also timeout error eg)
     end
-
-    # set user if nil, needed for delayed job in Package model
-    User.current ||= User.find_by_login(params[:user])
 
     # restore all package meta data objects in DB
     backend_pkgs = Collection.find :package, :match => "@project='#{self.name}'"
@@ -1605,9 +1634,13 @@ class Project < ActiveRecord::Base
   def do_project_release( params )
     User.current ||= User.find_by_login(params[:user])
 
+    check_write_access!
+
     packages.each do |pkg|
       pkg.project.repositories.each do |repo|
         next if params[:repository] and params[:repository] != repo.name
+        next if params[:targetproject] and params[:targetproject] != repo.releasetarget.project
+        next if params[:targetreposiory] and params[:targetreposiory] != repo.releasetarget.repository
         repo.release_targets.each do |releasetarget|
           # release source and binaries
           release_package(pkg, releasetarget.target_repository.project.name, pkg.name, repo)
@@ -1616,23 +1649,25 @@ class Project < ActiveRecord::Base
     end
   end
 
-  def bsrequest_repos_map(project, backend)
+  def bsrequest_repos_map(project)
     ret = Hash.new
-    uri = URI( "/getprojpack?project=#{CGI.escape(project.to_s)}&nopackages&withrepos&expandedrepos" )
+    uri = "/getprojpack?project=#{CGI.escape(project.to_s)}&nopackages&withrepos&expandedrepos"
     begin
-      xml = ActiveXML::Node.new( backend.direct_http( uri ) )
+      xml = Xmlhash.parse(Suse::Backend.get(uri).body)
     rescue ActiveXML::Transport::Error
       return ret
     end
-    xml.project.each_repository do |repo|
-      repo.each_path do |path|
-        ret[path.project.to_s] ||= Array.new
-        ret[path.project.to_s] << repo
+
+    xml['project'].elements('repository') do |repo|
+      repo.elements('path') do |path|
+        ret[path['project']] ||= Array.new
+        ret[path['project']] << repo
       end
-    end if xml.project
+    end
 
     return ret
   end
+
   private :bsrequest_repos_map
 
   def user_has_role?(user, role)
@@ -1641,6 +1676,8 @@ class Project < ActiveRecord::Base
   end
 
   def remove_role(what, role)
+    check_write_access!
+
     if what.kind_of? Group
       rel = self.project_group_role_relationships.where(bs_group_id: what.id)
     else
@@ -1654,6 +1691,8 @@ class Project < ActiveRecord::Base
   end
  
   def add_role(what, role)
+    check_write_access!
+
     self.transaction do
       if what.kind_of? Group
         self.project_group_role_relationships.create!(role: role, group: what)
@@ -1668,9 +1707,9 @@ class Project < ActiveRecord::Base
     return false unless name.kind_of? String
     # this length check is duplicated but useful for other uses for this function
     return false if name.length > 200 || name.blank?
-    return false if name =~ %r{[ \/\000-\037]}
     return false if name =~ %r{^[_\.]} 
-    return true
+    return true if name =~ /\A\w[-+\w\.:]*\z/
+    return false
   end
 
   def valid_name
@@ -1678,6 +1717,8 @@ class Project < ActiveRecord::Base
   end
 
   def update_patchinfo(patchinfo, opts = {})
+    check_write_access!
+
     opts[:enfore_issue_update] ||= false
 
     # collect bugnumbers from diff
@@ -1715,6 +1756,8 @@ class Project < ActiveRecord::Base
   end
 
   def create_patchinfo_from_request(req)
+    check_write_access!
+
     patchinfo = Package.new(:name => "patchinfo", :title => "Patchinfo", :description => "Collected packages for update")
     self.packages << patchinfo
     patchinfo.add_flag("build", "enable", nil, nil)
@@ -1749,10 +1792,11 @@ class Project < ActiveRecord::Base
 
   # updates packages automatically generated in the backend after submitting a product file
   def update_product_autopackages
+    check_write_access!
 
     backend_pkgs = Collection.find :id, :what => 'package', :match => "@project='#{self.name}' and starts-with(@name,'_product:')"
     b_pkg_index = backend_pkgs.each_package.inject(Hash.new) {|hash,elem| hash[elem.name] = elem; hash}
-    frontend_pkgs = self.packages.where("`packages`.name LIKE '_product:%'").all
+    frontend_pkgs = self.packages.where("`packages`.name LIKE '_product:%'")
     f_pkg_index = frontend_pkgs.inject(Hash.new) {|hash,elem| hash[elem.name] = elem; hash}
 
     all_pkgs = [b_pkg_index.keys, f_pkg_index.keys].flatten.uniq

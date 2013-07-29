@@ -13,9 +13,7 @@ class BsRequest < ActiveRecord::Base
     setup 'request_save_error'
   end
 
-  attr_accessible :comment, :creator, :description, :state, :superseded_by
-
-  has_many :bs_request_actions, :dependent => :destroy, :include => [:bs_request_action_accept_info]
+  has_many :bs_request_actions, -> { includes([:bs_request_action_accept_info]) }, dependent: :destroy
   has_many :bs_request_histories, :dependent => :delete_all
   has_many :reviews, :dependent => :delete_all
   has_and_belongs_to_many :bs_request_action_groups, join_table: :group_request_requests
@@ -224,6 +222,7 @@ class BsRequest < ActiveRecord::Base
   def change_state(state, opts = {})
     state = state.to_sym
     BsRequest.transaction do
+      self.lock!
       bs_request_histories.create comment: self.comment, commenter: self.commenter, state: self.state,
                                   superseded_by: self.superseded_by, created_at: self.updated_at
 
@@ -290,7 +289,7 @@ class BsRequest < ActiveRecord::Base
       found = false
 
       reviews_seen = Hash.new
-      self.reviews.all.reverse.each do |review|
+      self.reviews.reverse.each do |review|
         matching = true
         matching = false if review.by_user && review.by_user != opts[:by_user]
         matching = false if review.by_group && review.by_group != opts[:by_group]
@@ -438,12 +437,12 @@ class BsRequest < ActiveRecord::Base
 
     # filter for request state(s)
     unless states.blank?
-      rel = rel.where('bs_requests.state in (?)', states)
+      rel = rel.where('bs_requests.state in (?)', states).references(:bs_requests)
     end
 
     # Filter by request type (submit, delete, ...)
     unless types.blank?
-      rel = rel.where('bs_request_actions.type in (?)', types)
+      rel = rel.where('bs_request_actions.type in (?)', types).references(:bs_request_actions)
     end
 
     unless opts[:project].blank?
@@ -451,6 +450,7 @@ class BsRequest < ActiveRecord::Base
 
       if opts[:package].blank?
         if roles.count == 0 or roles.include? 'source'
+          rel = rel.references(:bs_request_actions)
           if opts[:subprojects].blank?
             inner_or << "bs_request_actions.source_project=#{c.quote(opts[:project])}"
           else
@@ -458,6 +458,7 @@ class BsRequest < ActiveRecord::Base
           end
         end
         if roles.count == 0 or roles.include? 'target'
+          rel = rel.references(:bs_request_actions)
           if opts[:subprojects].blank?
             inner_or << "bs_request_actions.target_project=#{c.quote(opts[:project])}"
           else
@@ -467,6 +468,7 @@ class BsRequest < ActiveRecord::Base
 
         if roles.count == 0 or roles.include? 'reviewer'
           if states.count == 0 or states.include? 'review'
+            rel = rel.references(:reviews)
             review_states.each do |r|
               rel = rel.includes(:reviews)
               inner_or << "(reviews.state=#{c.quote(r)} and reviews.by_project=#{c.quote(opts[:project])})"
@@ -475,13 +477,16 @@ class BsRequest < ActiveRecord::Base
         end
       else
         if roles.count == 0 or roles.include? 'source'
+          rel = rel.references(:bs_request_actions)
           inner_or << "(bs_request_actions.source_project=#{c.quote(opts[:project])} and bs_request_actions.source_package=#{c.quote(opts[:package])})"
         end
         if roles.count == 0 or roles.include? 'target'
+          rel = rel.references(:bs_request_actions)
           inner_or << "(bs_request_actions.target_project=#{c.quote(opts[:project])} and bs_request_actions.target_package=#{c.quote(opts[:package])})"
         end
         if roles.count == 0 or roles.include? 'reviewer'
           if states.count == 0 or states.include? 'review'
+            rel = rel.references(:reviews)
             review_states.each do |r|
               rel = rel.includes(:reviews)
               inner_or << "(reviews.state=#{c.quote(r)} and reviews.by_project=#{c.quote(opts[:project])} and reviews.by_package=#{c.quote(opts[:package])})"
@@ -506,16 +511,18 @@ class BsRequest < ActiveRecord::Base
       # find requests where user is maintainer in target project
       if roles.count == 0 or roles.include? 'maintainer'
         names = user.involved_projects.map { |p| p.name }
+        rel = rel.references(:bs_request_actions)
         inner_or << "bs_request_actions.target_project in ('" + names.join("','") + "')"
 
         ## find request where user is maintainer in target package, except we have to project already
         user.involved_packages.each do |ip|
+          rel = rel.references(:bs_request_actions)
           inner_or << "(bs_request_actions.target_project='#{ip.project.name}' and bs_request_actions.target_package='#{ip.name}')"
         end
       end
 
       if roles.count == 0 or roles.include? 'reviewer'
-        rel = rel.includes(:reviews)
+        rel = rel.includes(:reviews).references(:reviews)
         review_states.each do |r|
 
           # requests where the user is reviewer or own requests that are in review by someone else
@@ -549,6 +556,7 @@ class BsRequest < ActiveRecord::Base
       # find requests where group is maintainer in target project
       if roles.count == 0 or roles.include? 'maintainer'
         names = group.involved_projects.map { |p| p.name }
+        rel = rel.references(:bs_request_actions)
         inner_or << "bs_request_actions.target_project in ('" + names.join("','") + "')"
 
         ## find request where group is maintainer in target package, except we have to project already
@@ -558,7 +566,7 @@ class BsRequest < ActiveRecord::Base
       end
 
       if roles.count == 0 or roles.include? 'reviewer'
-        rel = rel.includes(:reviews)
+        rel = rel.includes(:reviews).references(:reviews)
 
         review_states.each do |r|
 
@@ -782,6 +790,9 @@ class BsRequest < ActiveRecord::Base
         action[:tprj] = xml.target_project
         action[:tpkg] = xml.target_package if xml.target_package
         action[:trepo] = xml.target_repository if xml.target_repository
+      end
+      if xml.target_releaseproject
+        action[:releaseproject] = xml.target_releaseproject
       end
 
       case xml.action_type # All further stuff depends on action type...

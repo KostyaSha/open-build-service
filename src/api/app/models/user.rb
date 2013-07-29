@@ -1,4 +1,5 @@
 require 'kconv'
+require_dependency 'api_exception'
 
 class User < ActiveRecord::Base
   has_many :taggings, :dependent => :destroy
@@ -16,17 +17,11 @@ class User < ActiveRecord::Base
   @@ldap_search_con = nil
   
   # users have a n:m relation to group
-  has_and_belongs_to_many :groups, :uniq => true
+  has_and_belongs_to_many :groups, -> { uniq() }
   # users have a n:m relation to roles
-  has_and_belongs_to_many :roles, :uniq => true
+  has_and_belongs_to_many :roles, -> { uniq() }
   # users have 0..1 user_registration records assigned to them
   has_one :user_registration
-
-  # We don't want to assign things to roles and groups in bulk assigns.
-  #attr_protected :roles, :groups, :created_at, :updated_at, :last_logged_in_at, :login_failure_count, :password_hash_type
-  # NOTE: Can't mix attr_protected and attr_accessible, but we set the latter to nil by default since
-  # git commit 107d7a612. Thus we have to explicitly list the allowed attributes:
-  attr_accessible :login, :email, :realname, :password, :password_confirmation, :state
 
   # This method returns an array with the names of all available
   # password hash types supported by this User class.
@@ -930,10 +925,15 @@ class User < ActiveRecord::Base
   #####################
 
   def is_admin?
-    if @is_admin.nil?
-      @is_admin = !roles.select("roles.id").find_by_title("Admin").nil?
+    if @is_admin.nil? # false is fine
+      @is_admin = roles.where(title: "Admin").exists?
     end
     @is_admin
+  end
+
+  # used to avoid
+  def is_admin=(is_she)
+    @is_admin = is_she
   end
 
   def is_in_group?(group)
@@ -1007,8 +1007,8 @@ class User < ActiveRecord::Base
   # project_name is name of the project
   def can_create_project?(project_name)
     ## special handling for home projects
-    return true if project_name == "home:#{self.login}" and CONFIG['allow_user_to_create_home_project'] != false and CONFIG['allow_user_to_create_home_project'] != "false"
-    return true if /^home:#{self.login}:/.match( project_name ) and CONFIG['allow_user_to_create_home_project'] != false and CONFIG['allow_user_to_create_home_project'] != "false"
+    return true if project_name == "home:#{self.login}" and ::Configuration.first.allow_user_to_create_home_project
+    return true if /^home:#{self.login}:/.match( project_name ) and ::Configuration.first.allow_user_to_create_home_project
 
     return true if has_global_permission? "create_project"
     p = Project.find_parent_for(project_name)
@@ -1160,7 +1160,6 @@ class User < ActiveRecord::Base
     return false
   end
 
-
   def local_role_check_with_ldap (role, object)
     logger.debug "Checking role with ldap: object #{object.name}, role #{role.title}"
     case object
@@ -1180,11 +1179,11 @@ class User < ActiveRecord::Base
 
   def has_local_role?( role, object )
     case object
-      when Package
+    when Package
         logger.debug "running local role package check: user #{self.login}, package #{object.name}, role '#{role.title}'"
         rels = object.package_user_role_relationships.where(:role_id => role.id, :bs_user_id => self.id).first
         return true if rels
-	rels = object.package_group_role_relationships.joins(:groups_users).where(:groups_users => {:user_id => self.id}).where(:role_id => role.id).first
+        rels = object.package_group_role_relationships.joins(:groups_users).where(:groups_users => {:user_id => self.id}).where(:role_id => role.id).first
         return true if rels
 
         # check with LDAP
@@ -1193,7 +1192,7 @@ class User < ActiveRecord::Base
         end
 
         return has_local_role?(role, object.project)
-      when Project
+    when Project
         logger.debug "running local role project check: user #{self.login}, project #{object.name}, role '#{role.title}'"
         rels = object.project_user_role_relationships.where(:role_id => role.id, :bs_user_id => self.id).first
         return true if rels
@@ -1262,14 +1261,13 @@ class User < ActiveRecord::Base
     role = Role.rolecache["maintainer"]
 
     ### all projects where user is maintainer
-    projects = ProjectUserRoleRelationship.where(bs_user_id: id, role_id: role.id).select(:db_project_id).all.map {|ur| ur.db_project_id }
+    projects = ProjectUserRoleRelationship.where(bs_user_id: id, role_id: role.id).select(:db_project_id).map {|ur| ur.db_project_id }
 
     # all projects where user is maintainer via a group
-    projects += ProjectGroupRoleRelationship.where(role_id: role.id).joins(:groups_users).where(groups_users: { user_id: self.id }).select(:db_project_id).all.map {|ur| ur.db_project_id } 
+    projects += ProjectGroupRoleRelationship.where(role_id: role.id).joins(:groups_users).where(groups_users: { user_id: self.id }).select(:db_project_id).map {|ur| ur.db_project_id } 
 
     projects.uniq
   end
-  protected :involved_projects_ids
   
   def involved_projects
     # now filter the projects that are not visible
@@ -1285,12 +1283,31 @@ class User < ActiveRecord::Base
     projects << -1 if projects.empty?
 
     # all packages where user is maintainer
-    packages = PackageUserRoleRelationship.where(bs_user_id: id, role_id: role.id).joins(:package).where("packages.db_project_id not in (?)", projects).select(:db_package_id).all.map {|ur| ur.db_package_id}
+    packages = PackageUserRoleRelationship.where(bs_user_id: id, role_id: role.id).joins(:package).where("packages.db_project_id not in (?)", projects).select(:db_package_id).map {|ur| ur.db_package_id}
 
     # all packages where user is maintainer via a group
-    packages += PackageGroupRoleRelationship.where(role_id: role.id).joins(:groups_users).where(groups_users: { user_id: self.id }).select(:db_package_id).all.map {|ur| ur.db_package_id}
+    packages += PackageGroupRoleRelationship.where(role_id: role.id).joins(:groups_users).where(groups_users: { user_id: self.id }).select(:db_package_id).map {|ur| ur.db_package_id}
 
     return Package.where(id: packages).where("db_project_id not in (?)", projects)
+  end
+
+  def forbidden_project_ids
+    @f_ids ||= ProjectUserRoleRelationship.forbidden_project_ids_for_user(self)
+  end
+
+  def user_relevant_packages_for_status
+    purr = "package_user_role_relationships"
+    role_id = Role.rolecache['maintainer'].id
+    # First fetch the project ids
+    projects_ids = self.involved_projects_ids
+    packages = Package.joins("LEFT OUTER JOIN #{purr} ON (#{purr}.db_package_id = packages.id AND #{purr}.role_id = #{role_id})")
+    # No maintainers
+    packages = packages.where([
+                                  "(#{purr}.bs_user_id = ?) "\
+      "OR "\
+      "(#{purr}.bs_user_id is null AND db_project_id in (?) )",
+                                  self.id, projects_ids])
+    packages.pluck(:id)
   end
 
   protected
