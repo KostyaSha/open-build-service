@@ -2,6 +2,8 @@ require 'base64'
 
 class RequestController < ApplicationController
   include ApplicationHelper
+  include CommentsHelper
+  before_filter :require_login, :only => [:save_comments]
 
   def add_reviewer_dialog
     @request_id = params[:id]
@@ -55,8 +57,8 @@ class RequestController < ApplicationController
   def show
     redirect_back_or_to :controller => 'home', :action => 'requests' and return if !params[:id]
     begin
-      @req = ApiDetails.find(:request_show, id: params[:id])
-    rescue ActiveXML::Transport::Error 
+      @req = ApiDetails.read(:request, params[:id])
+    rescue ApiDetails::NotFoundError
       flash[:error] = "Can't find request #{params[:id]}"
       redirect_back_or_to :controller => "home", :action => "requests" and return
     end
@@ -109,7 +111,6 @@ class RequestController < ApplicationController
       end
     end
 
-    Directory.free_cache(:project => @req.action.target.project, :package => @req.action.target.value('package'))
     if change_request(changestate, params)
       if params[:add_submitter_as_maintainer]
         if changestate != 'accepted'
@@ -157,6 +158,7 @@ class RequestController < ApplicationController
           Package.free_cache(:all, :project => action.source.project)
           Package.free_cache(action.source.package, :project => action.source.project) if action.source.package
         end
+        Directory.free_cache(:project => action.target.project, :package => action.target.package) if action.target
       end
     end
     redirect_to :action => 'show', :id => params[:id]
@@ -284,6 +286,34 @@ class RequestController < ApplicationController
       flash[:error] = "Incident #{e.message} does not exist"
     end
     redirect_to :controller => :request, :action => "show", :id => params[:id]
+  end
+
+
+  def comments
+    unless params[:reply] == 'true'
+      @comment = ApiDetails.read(:comments_by_request, params[:id])
+      @comments_as_thread = sort_comments(@comment)
+    else
+      render_dialog
+    end
+  end
+
+  def save_comments
+    begin
+      params[:request_id] = params[:id]
+      ApiDetails.save_comments(:save_comments_for_requests, params)
+
+      respond_to do |format|
+        format.js { render json: 'ok' }
+        format.html do
+          flash[:notice] = "Comment added successfully"
+          redirect_to action: :comments
+        end
+      end
+    rescue ActiveXML::Transport::Error => e
+      flash[:error] = e.summary
+      redirect_to(:action => "comments", :id => params[:id]) and return
+    end
   end
 
 private

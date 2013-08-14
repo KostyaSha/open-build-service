@@ -9,17 +9,18 @@ class ProjectController < ApplicationController
 
   include ApplicationHelper
   include RequestHelper
+  include CommentsHelper
 
   before_filter :load_project_info, :only => [:show]
   before_filter :require_project, :except => [:repository_arch_list,
     :autocomplete_projects, :autocomplete_incidents, :clear_failed_comment, :edit_comment_form, :index,
     :list, :list_all, :list_public, :new, :package_buildresult, :save_new, :save_prjconf,
     :rebuild_time_png, :new_incident, :show]
-  before_filter :require_login, :only => [:save_new, :toggle_watch, :delete, :new]
+  before_filter :require_login, :only => [:save_new, :toggle_watch, :delete, :new, :save_comments]
   before_filter :require_available_architectures, :only => [:add_repository, :add_repository_from_default_list,
                                                             :edit_repository, :update_target]
 
-  before_filter :load_releasetargets, :only => [ :show, :incident_request_dialog ]
+  before_filter :load_releasetargets, :only => [ :show, :incident_request_dialog, :release_repository_dialog ]
   prepend_before_filter :lockout_spiders, :only => [:requests, :rebuild_time]
 
   def index
@@ -36,7 +37,7 @@ class ProjectController < ApplicationController
   end
 
   def list
-    all_projects = ApiDetails.find(:all_projects)
+    all_projects = ApiDetails.read(:projects)
     @important_projects = []
     @main_projects = []
     @excl_projects = []
@@ -57,7 +58,11 @@ class ProjectController < ApplicationController
     end
     # excl and main are sorted by datatable, but important need to be in order
     @important_projects.sort! {|a,b| a[0] <=> b[0] }
-    render :list, :status => params[:nextstatus]
+    if @spider_bot
+      render :list_simple, status: params[:nextstatus]
+    else
+      render :list, status: params[:nextstatus]
+    end
   end
 
   def autocomplete_projects
@@ -237,8 +242,8 @@ class ProjectController < ApplicationController
   def load_project_info
     return unless check_valid_project_name
     begin
-      @project_info = ApiDetails.find(:project_infos, :project => params[:project])
-    rescue ActiveXML::Transport::NotFoundError
+      @project_info = ApiDetails.read(:infos_project, params[:project])
+    rescue ApiDetails::NotFoundError
       return render_project_missing
     end
     @project = Project.new(@project_info["xml"])
@@ -587,7 +592,7 @@ class ProjectController < ApplicationController
   end
 
   def requests
-    @requests = ApiDetails.find(:project_requests, :project => @project.name)
+    @requests = ApiDetails.read(:by_class_requests, project: @project.name)
     @default_request_type = params[:type] if params[:type]
     @default_request_state = params[:state] if params[:state]
   end
@@ -715,6 +720,12 @@ class ProjectController < ApplicationController
     redirect_back_or_to :action => 'repositories', :project => @project and return
   end
 
+  def release_repository_dialog
+    @project = params[:project]
+    @repository = params[:repository]
+    render_dialog
+  end
+
   def remove_target_request_dialog
     @project = params[:project]
     @repository = params[:repository]
@@ -754,6 +765,16 @@ class ProjectController < ApplicationController
     redirect_to :action => :repositories, :project => @project
   end
 
+  def release_repository
+    begin
+      @project.release_repository(params[:repository], params[:release_target])
+      flash[:notice] = "Repository '#{params[:repository]}' gets released"
+    rescue ActiveXML::Transport::Error => e
+      flash[:error] = "Failed to release repository '#{params[:repository]}' " + e.summary
+    end
+    redirect_to :action => :repositories, :project => @project
+  end
+
   def remove_path_from_target
     required_parameters :repository, :path_project, :path_repository
     @project.remove_path_from_target( params[:repository], params[:path_project], params[:path_repository] )
@@ -776,21 +797,21 @@ class ProjectController < ApplicationController
     redirect_to :action => :repositories, :project => @project
   end
 
-  def change_role_options(params, action)
-    ret = { project: @project.name, todo: action }
+  def change_role_options(params)
+    ret = Hash.new
     ret[:role] = params[:role] if params.has_key? :role
     if params.has_key? :userid
-      return ret.merge( { userid: params[:userid] })
+      return ret.merge( { user: params[:userid] })
     else
-      return ret.merge( { groupid: params[:groupid] })
+      return ret.merge( { group: params[:groupid] })
     end
   end
 
   def save_person
     begin
-      ApiDetails.command(:change_role, change_role_options(params, 'add'))
+      ApiDetails.create(:project_relationships, @project.name, change_role_options(params))
       @project.free_cache
-    rescue ApiDetails::CommandFailed => e
+    rescue ApiDetails::TransportError, ApiDetails::NotFoundError => e
       flash[:error] = e.to_s
       redirect_to action: :add_person, project: @project, role: params[:role], userid: params[:userid]
       return
@@ -806,9 +827,9 @@ class ProjectController < ApplicationController
 
   def save_group
     begin
-      ApiDetails.command(:change_role, change_role_options(params, 'add'))
+      ApiDetails.create :project_relationships, @project.name, change_role_options(params)
       @project.free_cache
-    rescue ApiDetails::CommandFailed => e
+    rescue ApiDetails::TransportError, ApiDetails::NotFoundError => e
       flash[:error] = e.to_s
       redirect_to action: :add_group, project: @project, role: params[:role], groupid: params[:groupid]
       return
@@ -824,9 +845,9 @@ class ProjectController < ApplicationController
 
   def remove_role
     begin
-      ApiDetails.command(:change_role, change_role_options(params, 'remove'))
+      ApiDetails.destroy :for_user_project_relationships, @project.name, change_role_options(params)
       @project.free_cache
-    rescue ActiveXML::Transport::Error => e
+    rescue ApiDetails::TransportError, ApiDetails::NotFoundError => e
       flash[:error] = e.summary
     end
     respond_to do |format|
@@ -1146,7 +1167,7 @@ class ProjectController < ApplicationController
     @filter_for_user = params[:filter_for_user]
 
     @develprojects = Hash.new
-    ps = ApiDetails.find(:project_status, project: params[:project],
+    ps = ApiDetails.read(:status_project, params[:project],
         filter_devel: filter,
         ignore_pending: @ignore_pending,
         limit_to_fails: @limit_to_fails,
@@ -1247,6 +1268,33 @@ class ProjectController < ApplicationController
     redirect_to :action => 'show', :project => params[:project] and return
   end
 
+  def comments
+    unless params[:reply] == 'true'
+      @comment = ApiDetails.read(:comments_by_project, @project)
+      @comments_as_thread = sort_comments(@comment)
+    else
+      render_dialog
+    end
+  end
+
+  def save_comments
+    begin
+      params[:project] = @project.name
+      ApiDetails.save_comments(:save_comments_for_projects, params)
+
+      respond_to do |format|
+        format.js { render json: 'ok' }
+        format.html do
+          flash[:notice] = "Comment added successfully"
+          redirect_to action: :comments
+        end
+      end
+    rescue ActiveXML::Transport::Error => e
+      flash[:error] = e.summary
+      redirect_to(:action => "comments", :project => params[:project]) and return
+    end
+  end
+  
   private
 
   def filter_packages( project, filterstring )

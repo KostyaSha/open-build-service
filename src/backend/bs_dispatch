@@ -290,7 +290,8 @@ sub mergeconstraints {
   $con = Storable::dclone($con);
   for my $con2 (@other) {
     if ($con2->{'hostlabel'}) {
-      $con->{'hostlabel'} = $con2->{'hostlabel'};
+      # FIXME: there is currently no way to specify excluded hostlabels via prjconf
+      push @{$con->{'hostlabel'}}, { '_content' => $con2->{'hostlabel'} };
     }
     if ($con2->{'sandbox'}) {
       $con->{'sandbox'} = $con2->{'sandbox'};
@@ -302,7 +303,7 @@ sub mergeconstraints {
       }
     }
     if ($con2->{'hardware'}) {
-      for my $el (qw{processors disk memory}) {
+      for my $el (qw{processors disk memory physicalmemory}) {
 	$con->{'hardware'}->{$el} = Storable::dclone($con2->{'hardware'}->{$el}) if defined $con2->{'hardware'}->{$el};
       }
       if ($con2->{'hardware'}->{'cpu'} && $con2->{'hardware'}->{'cpu'}->{'flag'}) {
@@ -426,14 +427,14 @@ sub oracle {
       return 0 unless grep {$_ eq $l->{'_content'}} @{$worker->{'hostlabel'} || []};
     }
   }
-  if ($constraints->{'sandbox'} && $constraints->{'sandbox'}->{'content'}) {
+  if ($constraints->{'sandbox'} && $constraints->{'sandbox'}->{'_content'}) {
     if ($constraints->{'sandbox'}->{'exclude'} && $constraints->{'sandbox'}->{'exclude'} eq 'true') {
-      return 0 if $constraints->{'sandbox'}->{'content'} eq ($worker->{'sandbox'} || '');
+      return 0 if $constraints->{'sandbox'}->{'_content'} eq ($worker->{'sandbox'} || '');
     } else {
-      if ($constraints->{'sandbox'}->{'content'} eq 'secure') {
+      if ($constraints->{'sandbox'}->{'_content'} eq 'secure') {
         return 0 unless $secure_sandboxes{$worker->{'sandbox'} || ''};
       } else {
-        return 0 unless $constraints->{'sandbox'}->{'content'} eq ($worker->{'sandbox'} || '');
+        return 0 unless $constraints->{'sandbox'}->{'_content'} eq ($worker->{'sandbox'} || '');
       }
     }
   }

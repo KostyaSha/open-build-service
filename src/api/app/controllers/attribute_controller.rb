@@ -1,6 +1,6 @@
-require "rexml/document"
-
 class AttributeController < ApplicationController
+
+  include ValidationHelper
 
   validate_action :index => {:method => :get, :response => :directory}
   validate_action :namespace_definition => {:method => :get, :response => :attribute_namespace_meta}
@@ -46,10 +46,8 @@ class AttributeController < ApplicationController
     namespace = params[:namespace]
 
     if request.get?
-      an = AttribNamespace.where(name: namespace).select(:id, :name).first
-      if an
-        render :text => an.render_axml, :content_type => 'text/xml'
-      else
+      @an = AttribNamespace.where(name: namespace).select(:id, :name).first
+      unless @an
         render_error :message => "Unknown attribute namespace '#{namespace}'",
           :status => 404, :errorcode => "unknown_attribute_namespace"
       end
@@ -67,10 +65,9 @@ class AttributeController < ApplicationController
     if request.post?
       logger.debug "--- updating attribute namespace definitions ---"
 
-      xml = REXML::Document.new( request.raw_post )
-      xml_element = xml.elements["/namespace"] if xml
+      xml_element = Xmlhash.parse( request.raw_post )
 
-      unless xml and xml_element and xml_element.attributes['name'] == namespace
+      unless xml_element['name'] == namespace
         render_error :status => 400, :errorcode => 'illegal_request',
           :message => "Illegal request: POST #{request.path}: path does not match content"
         return
@@ -118,10 +115,8 @@ class AttributeController < ApplicationController
     end
 
     if request.get?
-      at = ans.attrib_types.where(:name => name).first
-      if at
-        render :text => at.render_axml, :content_type => 'text/xml'
-      else
+      @at = ans.attrib_types.where(:name => name).first
+      unless @at
         render_error :message => "Unknown attribute '#{namespace}':'#{name}'",
           :status => 404, :errorcode => "unknown_attribute"
       end
@@ -139,9 +134,9 @@ class AttributeController < ApplicationController
     if request.post?
       logger.debug "--- updating attribute type definitions ---"
 
-      xml = REXML::Document.new( request.raw_post )
-      xml_element = xml.elements["/definition"] if xml
-      unless xml and xml_element and xml_element.attributes['name'] == name and xml_element.attributes['namespace'] == namespace
+      xml_element = Xmlhash.parse( request.raw_post )
+
+      unless xml_element and xml_element['name'] == name and xml_element['namespace'] == namespace
         render_error :status => 400, :errorcode => 'illegal_request',
           :message => "Illegal request: POST #{request.path}: path does not match content"
         return
@@ -168,6 +163,160 @@ class AttributeController < ApplicationController
     else
       render_error :status => 400, :errorcode => 'illegal_request',
         :message => "Illegal request: POST #{request.path}"
+    end
+  end
+
+  class RemoteProject < APIException
+    setup 400, "Attribute access to remote project is not yet supported"
+  end
+
+  class NotExistingAttribute < APIException
+    setup 404, "Attribute is not defined in system"
+  end
+
+  class InvalidAttribute < APIException
+  end
+
+  # GET
+  # /source/:project/_attribute/:attribute
+  # /source/:project/:package/_attribute/:attribute
+  # /source/:project/:package/:binary/_attribute/:attribute
+  #--------------------------------------------------------
+  def show_attribute
+    find_attribute_container
+
+    # init
+    # checks
+    # exec
+    if params[:rev]
+      path = "/source/#{URI.escape(params[:project])}/#{URI.escape(params[:package]||'_project')}/_attribute?meta=1&rev=#{CGI.escape(params[:rev])}"
+      answer = Suse::Backend.get(path)
+      render :text => answer.body.to_s, :content_type => 'text/xml'
+    else
+      render :text => @attribute_container.render_attribute_axml(params), :content_type => 'text/xml'
+    end
+  end
+
+  # DELETE
+  # /source/:project/_attribute/:attribute
+  # /source/:project/:package/_attribute/:attribute
+  # /source/:project/:package/:binary/_attribute/:attribute
+  #--------------------------------------------------------
+  def delete_attribute
+    find_attribute_container
+
+    # init
+    if params[:namespace].blank? or params[:name].blank?
+      render_error :status => 400, :errorcode => "missing_attribute",
+                   :message => "No attribute got specified for delete"
+      return
+    end
+    ac = @attribute_container.find_attribute(params[:namespace], params[:name], @binary)
+
+    # checks
+    unless ac
+      render_error :status => 404, :errorcode => "not_found",
+                   :message => "Attribute #{params[:attribute]} does not exist" and return
+    end
+    if params[:attribute]
+      unless User.current.can_create_attribute_in? @attribute_container, namespace: params[:namespace], name: params[:name]
+        render_error :status => 403, :errorcode => "change_attribute_no_permission",
+                     :message => "user #{user.login} has no permission to change attribute"
+        return
+      end
+    end
+
+    # exec
+    ac.destroy
+    @attribute_container.write_attributes(params[:comment])
+    render_ok
+  end
+
+  # POST
+  # /source/:project/_attribute/:attribute
+  # /source/:project/:package/_attribute/:attribute
+  # /source/:project/:package/:binary/_attribute/:attribute
+  #--------------------------------------------------------
+  def cmd_attribute
+    find_attribute_container
+
+    # init
+    req = ActiveXML::Node.new(request.raw_post)
+
+    # checks
+    if params[:attribute]
+      unless User.current.can_create_attribute_in? @attribute_container, namespace: params[:namespace], name: params[:name]
+        render_error :status => 403, :errorcode => "change_attribute_no_permission",
+                     :message => "user #{user.login} has no permission to change attribute"
+        return
+      end
+    else
+      req.each_attribute do |attr|
+        begin
+          can_create = User.current.can_create_attribute_in? @attribute_container, namespace: attr.namespace, name: attr.name
+        rescue ArgumentError => e
+          render_error :status => 400, :errorcode => "change_attribute_attribute_error",
+                       :message => e.message
+          return
+        end
+        unless can_create
+          render_error :status => 403, :errorcode => "change_attribute_no_permission",
+                       :message => "user #{user.login} has no permission to change attribute"
+          return
+        end
+      end
+    end
+
+    # exec
+    changed = false
+    req.each_attribute do |attr|
+      changed = true if @attribute_container.store_attribute_axml(attr, @binary)
+    end
+    @attribute_container.write_attributes(params[:comment]) if changed
+    render_ok
+  end
+
+  protected
+
+  before_action :require_valid_project_name, only: [:find_attribute_container]
+
+  def find_attribute_container
+    # init and validation
+    #--------------------
+    params[:user] = User.current.login if User.current
+    @binary=nil
+    @binary=params[:binary] if params[:binary]
+    # valid post commands
+    if params[:package] and params[:package] != "_project"
+      @attribute_container = Package.get_by_project_and_name(params[:project], params[:package], use_source: false)
+    else
+      # project
+      if Project.is_remote_project?(params[:project])
+        raise RemoteProject.new
+      end
+      @attribute_container = Project.get_by_name(params[:project])
+    end
+
+    if @attribute_container.nil?
+      raise NotExistingAttribute.new
+    end
+
+    # is the attribute type defined at all ?
+    if params[:attribute]
+      # Valid attribute
+      aname = params[:attribute]
+      name_parts = aname.split(/:/)
+      if name_parts.length != 2
+        raise InvalidAttribute.new "attribute '#{aname}' must be in the $NAMESPACE:$NAME style"
+      end
+      # existing ?
+      at = AttribType.find_by_name(params[:attribute])
+      unless at
+        raise NotExistingAttribute.new
+      end
+      # only needed for a get request
+      params[:namespace] = name_parts[0]
+      params[:name] = name_parts[1]
     end
   end
 

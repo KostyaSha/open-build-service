@@ -12,7 +12,7 @@ class Distribution < ActiveRecord::Base
 	db = Distribution.create(vendor: d['vendor'], version: d['version'], name: d['name'], project: d['project'], 
 				 reponame: d['reponame'], repository: d['repository'], link: d['link']) 
 	d.elements('architecture') do |a|
-          dba = DistributionArchitecture.find_by_architecture(name: a.to_s)
+          dba = Architecture.find_by_name!(a.to_s)
 	  db.architectures << dba
 	end
 	d.elements('icon') do |i|
@@ -44,6 +44,7 @@ class Distribution < ActiveRecord::Base
 
   def self.all_including_remotes
     list = Distribution.all_as_hash
+    repositories = list.map{ |d| d['reponame'] }
     
     remote_projects = Project.where("NOT ISNULL(projects.remoteurl)")
     remote_projects.each do |prj|
@@ -53,6 +54,8 @@ class Distribution < ActiveRecord::Base
       next if body.blank? # don't let broken remote instances break us
       xmlhash = Xmlhash.parse(body)
       xmlhash.elements('distribution') do |d|
+        next if repositories.include?( d['reponame'] )
+        repositories << d['reponame']
         iconlist = architecturelist = []
         d.elements('architecture') do |a|
           architecturelist << { "_content" => a.to_s }

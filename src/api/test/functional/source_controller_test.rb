@@ -698,7 +698,7 @@ end
     # try to unlock without comment
     post "/source/home:Iggy", { :cmd => "unlock" }
     assert_response 400
-    assert_xml_tag :tag => "status", :attributes => { :code => "no_comment" }
+    assert_xml_tag :tag => "status", :attributes => { :code => "missing_parameter" }
 
     # unlock does not work via meta data anymore
     doc.elements["/project/lock"].delete_element "enable"
@@ -757,7 +757,7 @@ end
     # try to unlock without comment
     post "/source/home:Iggy/TestLinkPack", { :cmd => "unlock" }
     assert_response 400
-    assert_xml_tag :tag => "status", :attributes => { :code => "no_comment" }
+    assert_xml_tag :tag => "status", :attributes => { :code => "missing_parameter" }
     # without permissions
     prepare_request_with_user "adrian", "so_alone"
     post "/source/home:Iggy/TestLinkPack", { :cmd => "unlock", :comment => "BlahFasel" }
@@ -1086,6 +1086,15 @@ end
     assert_response :success
     delete "/source/home:tom:projectC"
     assert_response :success
+  end
+
+  def test_fail_correctly_with_broken_repo_config
+    prepare_request_with_user "tom", "thunder"
+    # double definition of i586 architecture
+    put "/source/home:tom:projectA/_meta", "<project name='home:tom:projectA'> <title/> <description/> <repository name='repoA'> <arch>i586</arch> <arch>i586</arch> </repository> </project>"
+    assert_response 400
+    assert_xml_tag( :tag => "status", :attributes => { :code => "project_save_error"} )
+    assert_match %r(double use of architecture: 'i586'), @response.body
   end
 
   def test_delete_project_with_repository_dependencies
@@ -1493,16 +1502,16 @@ end
                                assertresp3, asserteq3, assertresp4)
     # write without permission: 
     prepare_request_with_user "tom", "thunder"
-    get url_for(:controller => :source, :action => :file, :project => "kde4", :package => "kdelibs", :filename => "my_patch.diff")
+    get url_for(:controller => :source, :action => :get_file, :project => "kde4", :package => "kdelibs", :filename => "my_patch.diff")
     assert_response :success
     origstring = @response.body.to_s
     teststring = "&;"
-    put url_for(:controller => :source, :action => :file, :project => "kde4", :package => "kdelibs", :filename => "my_patch.diff"), teststring
+    put url_for(:controller => :source, :action => :get_file, :project => "kde4", :package => "kdelibs", :filename => "my_patch.diff"), teststring
     assert_response( 403, message="Was able to write a package file without permission" )
     assert_xml_tag( :tag => "status" )
     
     # check that content is unchanged: 
-    get url_for(:controller => :source, :action => :file, :project => "kde4", :package => "kdelibs", :filename => "my_patch.diff")
+    get url_for(:controller => :source, :action => :get_file, :project => "kde4", :package => "kdelibs", :filename => "my_patch.diff")
     assert_response :success
     assert_equal( @response.body.to_s, origstring, message="Package file was changed without permissions" )
 
@@ -1939,7 +1948,7 @@ end
     post "/source/BaseDistro2.0:LinkedUpdateProject/pack2", :cmd => "copy", :oproject => "BaseDistro:Update", :opackage => "pack2"
     assert_response :success
     post "/source/BaseDistro2.0:LinkedUpdateProject/pack2", :cmd => "undelete"
-    assert_response 404
+    assert_response 400 # already exists
     assert_match(/package_exists/, @response.body)
     delete "/source/BaseDistro2.0:LinkedUpdateProject/pack2"
     assert_response :success
@@ -2004,7 +2013,7 @@ end
 
     # try to release with incorrect trigger
     post "/source/home:Iggy?cmd=release", nil
-    assert_response 400
+    assert_response 403 # cmd_no_permissions
     assert_match(/Trigger is not set to manual in repository home:Iggy\/10.2/, @response.body)
 
     # add correct trigger
@@ -2083,7 +2092,7 @@ end
 
     # try to release with incorrect trigger
     post "/source/home:Iggy/TestPack?cmd=release", nil
-    assert_response 400
+    assert_response 403
     assert_match(/Trigger is not set to manual in repository home:Iggy\/10.2/, @response.body)
 
     # add correct trigger
@@ -2226,7 +2235,7 @@ end
     node = ActiveXML::Node.new(@response.body)
     revision = node.each_revision.last.value :rev
     revision = revision.to_i + 1
-    post "/source/home:Iggy/TestPack?cmd=commitfilelist", ' <directory> <entry name="filename" md5="45685e95985e20822fb2538a522a5ccf" /> </directory> '
+    raw_post "/source/home:Iggy/TestPack?cmd=commitfilelist", ' <directory> <entry name="filename" md5="45685e95985e20822fb2538a522a5ccf" /> </directory> '
     assert_response :success
     get "/source/home:Iggy/TestPack/filename"
     assert_response :success
@@ -2285,7 +2294,7 @@ end
     assert_response :success
     put "/source/home:Iggy/_product/filename?rev=repository", 'CONTENT'
     assert_response :success
-    post "/source/home:Iggy/_product?cmd=commitfilelist", ' <directory> <entry name="filename" md5="45685e95985e20822fb2538a522a5ccf" /> </directory> '
+    raw_post "/source/home:Iggy/_product?cmd=commitfilelist", ' <directory> <entry name="filename" md5="45685e95985e20822fb2538a522a5ccf" /> </directory> '
     assert_response :success
     get "/source/home:Iggy/_product/filename"
     assert_response :success
@@ -2299,7 +2308,7 @@ end
     assert_response 400 # illegal content
     put "/source/home:Iggy/_pattern/filename?rev=repository", load_backend_file("pattern/digiKam.xml")
     assert_response :success
-    post "/source/home:Iggy/_pattern?cmd=commitfilelist", ' <directory> <entry name="filename" md5="c5fadc30cd4c7d45bd3ce053b2751ec2" /> </directory> '
+    raw_post "/source/home:Iggy/_pattern?cmd=commitfilelist", ' <directory> <entry name="filename" md5="c5fadc30cd4c7d45bd3ce053b2751ec2" /> </directory> '
     assert_response :success
     get "/source/home:Iggy/_pattern/filename"
     assert_response :success
@@ -2311,7 +2320,7 @@ end
     # _project exists always
     put "/source/home:Iggy/_project/filename?rev=repository", 'CONTENT'
     assert_response :success
-    post "/source/home:Iggy/_project?cmd=commitfilelist", ' <directory> <entry name="filename" md5="45685e95985e20822fb2538a522a5ccf" /> </directory> '
+    raw_post "/source/home:Iggy/_project?cmd=commitfilelist", ' <directory> <entry name="filename" md5="45685e95985e20822fb2538a522a5ccf" /> </directory> '
     assert_response :success
     get "/source/home:Iggy/_project/filename"
     assert_response :success
@@ -2701,7 +2710,7 @@ end
 
     # undelete package again
     post "/source/home:tom:branches:home:Iggy/TestPack", :cmd => :undelete
-    assert_response 404
+    assert_response 400 # already exists
 
   end
 
@@ -2739,7 +2748,7 @@ end
 
     post "/source/kde4/kdelibs?cmd=set_flag&repository=10.7&arch=i586&flag=build&status=enable"
     assert_response 403
-    assert_xml_tag :tag => "status", :attributes => { :code => "delete_package_no_permission" }
+    assert_xml_tag :tag => "status", :attributes => { :code => "cmd_execution_no_permission" }
 
     post "/source/home:Iggy/TestPack?cmd=set_flag&repository=10.7&arch=i586&flag=build&status=enable"
     assert_response :success # actually I consider forbidding repositories not existant
@@ -2836,7 +2845,7 @@ end
 
     post "/source/kde4/kdelibs?cmd=remove_flag&repository=10.2&arch=x86_64&flag=debuginfo"
     assert_response 403
-    assert_xml_tag :tag => "status", :attributes => { :code => "delete_package_no_permission" }
+    assert_xml_tag :tag => "status", :attributes => { :code => "cmd_execution_no_permission" }
 
     post "/source/home:Iggy/TestPack?cmd=remove_flag&repository=10.2&arch=x86_64&flag=debuginfo"
     assert_response :success
@@ -2883,7 +2892,7 @@ end
 
     post "/source/kde4/kdelibs?cmd=remove_flag&repository=10.2&arch=x86_64&flag=debuginfo"
     assert_response 403
-    assert_xml_tag :tag => "status", :attributes => { :code => "delete_package_no_permission" }
+    assert_xml_tag :tag => "status", :attributes => { :code => "cmd_execution_no_permission" }
 
     post "/source/home:Iggy?cmd=remove_flag&repository=10.2&arch=x86_64&flag=debuginfo"
     assert_response :success

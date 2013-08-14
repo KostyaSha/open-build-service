@@ -20,8 +20,13 @@ OBSApi::Application.routes.draw do
     match 'person/:login' => 'person#userinfo', :constraints => cons, via: [:get, :put, :post]
 
     ### /group
-    get 'group' => 'group#index'
-    match 'group/:title' => 'group#group', :constraints => cons, via: [:get, :put, :delete, :post]
+    controller :group do
+      get 'group' => :index
+      get 'group/:title' => :show
+      delete 'group/:title' => :delete
+      put 'group/:title' => :update
+      post 'group/:title' => :command
+    end
 
     ### /service
     get 'service' => 'service#index'
@@ -39,35 +44,46 @@ OBSApi::Application.routes.draw do
       post 'test/killme' => :killme
       post 'test/startme' => :startme
       post 'test/test_start' => :test_start
+      post 'test/prepare_search' => :prepare_search
     end
-    
+
+    ### /attribute is before source as it needs more specific routes for projects
+    controller :attribute do
+      get 'attribute' => :index
+      get 'attribute/:namespace' => :index
+      match 'attribute/:namespace/_meta' =>  :namespace_definition, via: [:get, :delete, :post]
+      match 'attribute/:namespace/:name/_meta' => :attribute_definition, via: [:get, :delete, :post]
+
+      get 'source/:project(/:package(/:binary))/_attribute(/:attribute)' => :show_attribute, :constraints => cons
+      post 'source/:project(/:package(/:binary))/_attribute(/:attribute)' => :cmd_attribute, :constraints => cons
+      delete 'source/:project(/:package(/:binary))/_attribute(/:attribute)' => :delete_attribute, :constraints => cons
+    end
+
     controller :source do
 
-      match 'source' => :index, via: [:get, :post]
+      get 'source' => :index
+      post 'source' => :global_command
 
       # project level
-      match 'source/:project' => :index_project, :constraints => cons, via: [:get, :post,  :delete]
+      get 'source/:project' => :show_project, constraints: cons
+      delete 'source/:project' => :delete_project, constraints: cons
+      post 'source/:project' => :project_command, constraints: cons
       match 'source/:project/_meta' => :project_meta, :constraints => cons, via: [:get, :put]
-      match 'source/:project/_attribute' => :attribute_meta, :constraints => cons, via: [:get, :post, :delete]
-      match 'source/:project/_attribute/:attribute' => :attribute_meta, :constraints => cons, via: [:get, :post, :delete]
+
       match 'source/:project/_config' => :project_config, :constraints => cons, via: [:get, :put]
       match 'source/:project/_pubkey' => :project_pubkey, :constraints => cons, via: [:get, :delete]
 
       # package level 
       match '/source/:project/:package/_meta' => :package_meta, :constraints => cons, via: [:get, :put]
-      match 'source/:project/:package/_attribute' => :attribute_meta, :constraints => cons, via: [:get, :post, :delete]
-      match 'source/:project/:package/_attribute/:attribute' => :attribute_meta, :constraints => cons, via: [:get, :post, :delete]
-      match 'source/:project/:package/:binary/_attribute' => :attribute_meta, :constraints =>  cons, via: [:get, :post, :delete]
-      match 'source/:project/:package/:binary/_attribute/:attribute' => :attribute_meta,  :constraints =>  cons, via: [:get, :post, :delete]
-      match 'source/:project/:package/:filename' => :file, :constraints =>  cons, via: [:get, :put, :delete]
-      match 'source/:project/:package' => :index_package, :constraints => cons, via: [:get, :post, :delete]
-    end
 
-    ### /attribute
-    get 'attribute' => 'attribute#index'
-    get 'attribute/:namespace' => 'attribute#index'
-    match 'attribute/:namespace/_meta' => 'attribute#namespace_definition', via: [:get, :delete, :post]
-    match 'attribute/:namespace/:name/_meta' => 'attribute#attribute_definition', via: [:get, :delete, :post]
+      get 'source/:project/:package/:filename' => :get_file, constraints: cons
+      delete 'source/:project/:package/:filename' => :delete_file, constraints: cons
+      put 'source/:project/:package/:filename' => :update_file, constraints: cons
+
+      get 'source/:project/:package' => :show_package, constraints: cons
+      post 'source/:project/:package' => :package_command, constraints: cons
+      delete 'source/:project/:package' => :delete_package, constraints: cons
+    end
 
     ### /architecture
     resources :architectures, :only => [:index, :show, :update] # create,delete currently disabled
@@ -296,20 +312,49 @@ OBSApi::Application.routes.draw do
     # NOTE: webui routes are NOT stable and change together with the webui.
     #       DO NOT USE THEM IN YOUR TOOLS!
     #
-    controller :webui do
-      get 'webui/project_infos' => :project_infos
-      get 'webui/project_requests' => :project_requests
-      get 'webui/project_flags' => :project_flags
-      get 'webui/package_flags' => :package_flags
-      get 'webui/person_requests_that_need_work' => :person_requests_that_need_work
-      get 'webui/request_show' => :request_show
-      get 'webui/person_involved_requests' => :person_involved_requests
-      get 'webui/request_ids' => :request_ids
-      get 'webui/request_list' => :request_list
-      post 'webui/change_role' => :change_role
-      get 'webui/all_projects' => :all_projects
-      get 'webui/owner' => :owner
-      get 'webui/project_status' => :project_status
+    namespace :webui do
+      resources :projects, :only => [:index], :constraints => { :id => %r{[^\/]*} } do
+        member do
+          get "infos"
+          get "status"
+        end
+        resources :relationships, :only => [:create] do
+          collection do
+            delete :for_user, action: :remove_user
+          end
+        end
+        resources :flags, :only => [:index]
+        resources :packages, :only => [], :constraints => { :id => %r{[^\/]*} } do
+          resources :relationships, :only => [:create] do
+            collection do
+              delete :for_user, action: :remove_user
+            end
+          end
+          resources :flags, :only => [:index]
+        end
+      end
+      resources :packages, :only => [], :constraints => { :id => %r{[^\/]*} } do
+        get "flags", :on => :member
+      end
+      resources :requests, :only => [:index, :show] do
+        collection do
+          get :ids
+          get :by_class
+        end
+      end
+      resources :owners, :only => [:index]
+      resources :searches, :only => [:new, :create]
+      resources :attrib_types, :only => [:index]
+
+      # comments
+      get 'comments/request/:id/' => 'comments#requests', constraints: cons
+      get 'comments/package/:project/:package/' => 'comments#packages', constraints: cons
+      get 'comments/project/:project/' => 'comments#projects', constraints: cons
+      
+      post 'comments/project/:project/new' => 'comments#projects_new', constraints: cons
+      post 'comments/package/:project/:package/new' => 'comments#packages_new', constraints: cons
+      post 'comments/request/:id/new' => 'comments#requests_new', constraints: cons
+
     end
 
     get "/404" => "main#notfound"

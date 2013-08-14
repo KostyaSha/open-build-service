@@ -2,6 +2,8 @@ require_dependency 'opensuse/backend'
 
 class Project < ActiveRecord::Base
   include FlagHelper
+  include CanRenderModel
+  include HasRelationships
 
   class CycleError < APIException
     setup "project_cycle"
@@ -28,12 +30,9 @@ class Project < ActiveRecord::Base
   end
 
   before_destroy :cleanup_before_destroy
-  after_save 'ProjectUserRoleRelationship.discard_cache'
+  after_save 'Relationship.discard_cache'
   after_rollback :reset_cache
-  after_rollback 'ProjectUserRoleRelationship.discard_cache'
-
-  has_many :project_user_role_relationships, :dependent => :delete_all, foreign_key: :db_project_id
-  has_many :project_group_role_relationships, :dependent => :delete_all, foreign_key: :db_project_id
+  after_rollback 'Relationship.discard_cache'
 
   has_many :packages, :dependent => :destroy, foreign_key: :db_project_id, inverse_of: :project
   has_many :attribs, :dependent => :destroy, foreign_key: :db_project_id
@@ -53,7 +52,7 @@ class Project < ActiveRecord::Base
   has_many :flags, dependent: :delete_all, foreign_key: :db_project_id
 
   # optional
-  has_one :maintenance_incident, :dependent => :destroy, foreign_key: :db_project_id
+  has_one :maintenance_incident, dependent: :delete, foreign_key: :db_project_id
 
   # self-reference between devel projects and maintenance projects
   has_many :maintained_projects, :class_name => "Project", :foreign_key => "maintenance_project_id"
@@ -62,11 +61,12 @@ class Project < ActiveRecord::Base
   has_many  :develprojects, :class_name => "Project", :foreign_key => 'develproject_id'
   belongs_to :develproject, :class_name => "Project"
 
-  default_scope { where("projects.id not in (?)", ProjectUserRoleRelationship.forbidden_project_ids ) }
+  has_many :comments
+
+  default_scope { where("projects.id not in (?)", Relationship.forbidden_project_ids ) }
 
   validates :name, presence: true, length: { maximum: 200 }
   validate :valid_name
-
  
   def download_name
     self.name.gsub(/:/, ':/')
@@ -81,7 +81,7 @@ class Project < ActiveRecord::Base
         lreps << lrep
       end
     end
-    if lreps.length > 0
+    unless lreps.blank?
       #replace links to this projects with links to the "deleted" project
       lreps.each do |link_rep|
         link_rep.path_elements.includes(:link).each do |pe|
@@ -100,7 +100,7 @@ class Project < ActiveRecord::Base
         lreps << lrep
       end
     end
-    if lreps.length > 0
+    unless lreps.blank?
       #replace links to this projects with links to the "deleted" project
       lreps.each do |link_rep|
         link_rep.release_targets.includes(:target_repository).each do |rt|
@@ -133,11 +133,11 @@ class Project < ActiveRecord::Base
       return false if dbp.nil?
       # check for 'access' flag
 
-      return true unless ProjectUserRoleRelationship.forbidden_project_ids.include? dbp.id
+      return true unless Relationship.forbidden_project_ids.include? dbp.id
 
       # simple check for involvement --> involved users can access
       # dbp.id, User.current
-      grouprels = dbp.project_group_role_relationships.all
+      grouprels = dbp.relationships.groups.to_a
 
       if grouprels
         ret = 0
@@ -146,14 +146,12 @@ class Project < ActiveRecord::Base
           if grouprel and grouprel.bs_group_id
             # LOCAL
             # if user is in group -> return true
-            ret = ret + 1 if User.current.is_in_group?(grouprel.bs_group_id)
+            ret = ret + 1 if User.current.is_in_group?(grouprel.group_id)
             # LDAP
-# FIXME: please do not do special things here for ldap. please cover this in a generic group modell.
-            if defined?( CONFIG['ldap_mode'] ) && CONFIG['ldap_mode'] == :on
-              if defined?( CONFIG['ldap_group_support'] ) && CONFIG['ldap_group_support'] == :on
-                if User.current.user_in_group_ldap?(group.bs_group_id)
-                  ret = ret + 1
-                end
+            # FIXME: please do not do special things here for ldap. please cover this in a generic group model.
+            if CONFIG['ldap_mode'] == :on && CONFIG['ldap_group_support'] == :on
+              if User.current.user_in_group_ldap?(group.bs_group_id)
+                ret = ret + 1
               end
             end
             #
@@ -174,7 +172,7 @@ class Project < ActiveRecord::Base
       arel = where(name: name)
       if opts[:select]
          arel = arel.select(opts[:select])
-	 opts.delete :select
+         opts.delete :select
       end
       dbp = arel.first
       if dbp.nil?
@@ -186,7 +184,7 @@ class Project < ActiveRecord::Base
          Package.joins(:flags).where(db_project_id: dbp.id).where("flags.flag='sourceaccess'").each do |pkg|
            raise ReadAccessError, name unless Package.check_access? pkg
          end
-	 opts.delete :includeallpackages
+         opts.delete :includeallpackages
       end
       raise "unsupport options #{opts.inspect}" if opts.size > 0
       unless check_access?(dbp)
@@ -285,8 +283,8 @@ class Project < ActiveRecord::Base
       rescue Package::DeleteError => e
         e.packages.each do |p|
           if p.project != self
-	    raise DeleteError.new "Package #{self.name}/{pkg.name} can not be deleted as it's devel package of #{p.project.name}/#{p.name}"
-	  end
+            raise DeleteError.new "Package #{self.name}/{pkg.name} can not be deleted as it's devel package of #{p.project.name}/#{p.name}"
+          end
         end
       end
     end
@@ -414,111 +412,13 @@ class Project < ActiveRecord::Base
       maintained_project.save!
     end
 
-    #--- update users ---#
-    usercache = Hash.new
-    self.project_user_role_relationships.each do |purr|
-      h = usercache[purr.user.login] ||= Hash.new
-      h[purr.role.title] = purr
-    end
+    update_relationships_from_xml( xmlhash )
 
-    xmlhash.elements('person') do |person|
-      user=User.find_by_login!(person['userid'])
-      if not Role.rolecache.has_key? person['role']
-        raise SaveError, "illegal role name '#{person.role}'"
-      end
-      
-      if usercache.has_key? person['userid']
-        # user has already a role in this project
-        pcache = usercache[person['userid']]
-        if pcache.has_key? person['role']
-          #role already defined, only remove from cache
-          pcache[person['role']] = :keep
-        else
-          #new role
-          self.project_user_role_relationships.new(user: user, role: Role.rolecache[person['role']])
-          pcache[person['role']] = :new
-        end
-      else
-        self.project_user_role_relationships.new(user: user, role: Role.rolecache[person['role']])
-        usercache[person['userid']] = { person['role'] => :new }
-      end
-    end
-      
-    #delete all roles that weren't found in the uploaded xml
-    usercache.each do |user, roles|
-      roles.each do |role, object|
-        next if [:keep, :new].include? object
-        object.delete
-      end
-    end
-    
-    #--- end update users ---#
-    
-    #--- update groups ---#
-    groupcache = Hash.new
-    self.project_group_role_relationships.each do |pgrr|
-      h = groupcache[pgrr.group.title] ||= Hash.new
-      h[pgrr.role.title] = pgrr
-    end
-
-    xmlhash.elements('group') do |ge|
-      group=Group.find_by_title(ge['groupid'])
-      if not Role.rolecache.has_key? ge['role']
-        raise SaveError, "illegal role name '#{ge['role']}'"
-      end
-      
-      if groupcache.has_key? ge['groupid']
-        # group has already a role in this project
-        pcache = groupcache[ge['groupid']]
-        if pcache.has_key? ge['role']
-          #role already defined, only remove from cache
-          pcache[ge['role']] = :keep
-        else
-          #new role
-          self.project_group_role_relationships.new(group: group, role: Role.rolecache[ge['role']])
-          pcache[ge['role']] = :new
-        end
-      else
-        if !group
-          # check with LDAP
-          if defined?( CONFIG['ldap_mode'] ) && CONFIG['ldap_mode'] == :on
-            if defined?( CONFIG['ldap_group_support'] ) && CONFIG['ldap_group_support'] == :on
-              if User.find_group_with_ldap(ge['groupid'])
-                logger.debug "Find and Create group '#{ge['groupid']}' from LDAP"
-                newgroup = Group.create( :title => ge['groupid'] )
-                unless newgroup.errors.empty?
-                  raise SaveError, "unknown group '#{ge['groupid']}', failed to create the ldap groupid on OBS"
-                end
-                group=Group.find_by_title(ge['groupid'])
-              else
-                raise SaveError, "unknown group '#{ge['groupid']}' on LDAP server"
-              end
-            end
-          end
-          
-          unless group
-            raise SaveError, "unknown group '#{ge['groupid']}'"
-          end
-        end
-        
-        self.project_group_role_relationships.new(group: group, role: Role.rolecache[ge['role']])
-      end
-    end
-    
-    #delete all roles that weren't found in the uploaded xml
-    groupcache.each do |group, roles|
-      roles.each do |role, object|
-        next if [:keep, :new].include? object
-        object.destroy
-      end
-    end
-    #--- end update groups ---#
-    
     #--- update flag group ---#
     update_all_flags( xmlhash )
     if ::Configuration.first.default_access_disabled == true and new_record
       # write a default access disable flag by default in this mode for projects if not defined
-      unless xmlhash.elements('access').length > 0
+      if xmlhash.elements('access').empty?
         self.flags.new(:status => 'disable', :flag => 'access')
       end
     end
@@ -676,6 +576,9 @@ class Project < ActiveRecord::Base
         unless Architecture.archcache.has_key? arch
           raise SaveError, "unknown architecture: '#{arch}'"
         end
+        if current_repo.repository_architectures.where( architecture: Architecture.archcache[arch] ).exists?
+          raise SaveError, "double use of architecture: '#{arch}'"
+        end
         a = current_repo.repository_architectures.new :architecture => Architecture.archcache[arch]
         a.position = position
         position += 1
@@ -739,7 +642,7 @@ class Project < ActiveRecord::Base
   end
 
   def reset_cache
-    Rails.cache.delete('meta_project_%d' % id)
+    Rails.cache.delete('xml_project_%d' % id)
   end
 
   def store_attribute_axml( attrib, binary=nil )
@@ -763,7 +666,7 @@ class Project < ActiveRecord::Base
     end
 
     # verify with allowed values for this attribute definition
-    if atype.allowed_values.length > 0
+    unless atype.allowed_values.blank?
       logger.debug( "Verify value with allowed" )
       attrib.each_value.each do |value|
         found = 0
@@ -817,37 +720,6 @@ class Project < ActiveRecord::Base
     return a
   end
 
-  def render_issues_axml(params={})
-    builder = Nokogiri::XML::Builder.new
-
-    filter_changes = states = nil
-    filter_changes = params[:changes].split(",") if params[:changes]
-    states = params[:states].split(",") if params[:states]
-    login = params[:login]
-
-    builder.project( :name => self.name ) do |project|
-      self.packages.each do |pkg|
-        project.package( :project => pkg.project.name, :name => pkg.name ) do |package|
-          pkg.package_issues.each do |i|
-            next if filter_changes and not filter_changes.include? i.change
-            next if states and (not i.issue.state or not states.include? i.issue.state)
-            o = nil
-            if i.issue.owner_id
-              # self.owner must not by used, since it is reserved by rails
-              o = User.find i.issue.owner_id
-            end
-            next if login and (not o or not login == o.login)
-            i.issue.render_body(package, i.change)
-          end
-        end
-      end
-    end
-
-    return builder.doc.to_xml :indent => 2, :encoding => 'UTF-8',
-                              :save_with => Nokogiri::XML::Node::SaveOptions::NO_DECLARATION |
-                                            Nokogiri::XML::Node::SaveOptions::FORMAT
-  end
-
   def render_attribute_axml(params={})
     builder = Nokogiri::XML::Builder.new
 
@@ -859,12 +731,12 @@ class Project < ActiveRecord::Base
         type_name = attr.attrib_type.attrib_namespace.name+":"+attr.attrib_type.name
         a.attribute(:name => attr.attrib_type.name, :namespace => attr.attrib_type.attrib_namespace.name) do |y|
           done[type_name]=1
-          if attr.issues.length>0
+          unless attr.issues.blank?
             attr.issues.each do |ai|
               y.issue(:name => ai.issue.name, :tracker => ai.issue.issue_tracker.name)
             end
           end
-          if attr.values.length>0
+          unless attr.values.blank?
             attr.values.each do |val|
               y.value(val.value)
             end
@@ -905,178 +777,24 @@ class Project < ActiveRecord::Base
     self.class.find_parent_for self.name
   end
 
-  def add_user( user, role )
-    check_write_access!
-
-    unless role.kind_of? Role
-      role = Role.get_by_title(role)
-    end
-    if role.global
-      #only nonglobal roles may be set in a project
-      raise SaveError, "tried to set global role '#{role_title}' for user '#{user}' in project '#{self.name}'"
-    end
-
-    unless user.kind_of? User
-      user = User.get_by_login(user)
-    end
-
-    logger.debug "adding user: #{user.login}, #{role.title}"
-    ProjectUserRoleRelationship.create(
-      :project => self,
-      :user => user,
-      :role => role )
-  end
-
-  def add_group( group, role )
-    check_write_access!
-
-    unless role.kind_of? Role
-      role = Role.get_by_title(role)
-    end
-    if role.global
-      #only nonglobal roles may be set in a project
-      raise SaveError, "tried to set global role '#{role_title}' for group '#{group}' in project '#{self.name}'"
-    end
-
-    unless group.kind_of? Group
-      group = Group.find_by_title(group)
-    end
-
-    logger.debug "adding group: #{group.title}, #{role.title}"
-    ProjectGroupRoleRelationship.create(
-      :project => self,
-      :group => group,
-      :role => role )
-  end
-
-  def each_user( opt={}, &block )
-    raise "No block given" unless block
-    users = project_user_role_relationships.joins(:role, :user).order("roles.title, users.login").pluck("users.login, roles.title")
-    users.each do |login, title|
-      block.call(login, title)
-    end
-  end
-
-  def each_group( opt={}, &block )
-    raise "No block given" unless block
-    groups = project_group_role_relationships.joins(:role, :group).order("groups.title, roles.title").pluck("groups.title as grouptitle, roles.title as roletitle")
-    groups.each do |group, role|
-      block.call(group, role)
-    end
+  def render_xml(view = nil)
+    # CanRenderModel
+    super(view: view)
   end
 
   def to_axml(view = nil)
     unless view
-       Rails.cache.fetch('meta_project_%d' % id) do
-         render_axml(view)
+       Rails.cache.fetch('xml_project_%d' % id) do
+         render_xml(view)
        end
-    else 
-      render_axml(view)
+    else
+      render_xml(view)
     end
-  end
-
-  def render_axml(view = nil)
-    builder = Nokogiri::XML::Builder.new
-    logger.debug "----------------- rendering project #{name} ------------------------"
-
-    project_attributes = {:name => name}
-    # Check if the project has a special type defined (like maintenance)
-    project_attributes[:kind] = project_type if project_type and project_type != "standard"
-
-    builder.project( project_attributes ) do |project|
-      project.title( title )
-      project.description( description )
-      
-      self.linkedprojects.each do |l|
-        if l.linked_db_project
-           project.link( :project => l.linked_db_project.name )
-        else
-           project.link( :project => l.linked_remote_project_name )
-        end
-      end
-
-      project.remoteurl(remoteurl) unless remoteurl.blank?
-      project.remoteproject(remoteproject) unless remoteproject.blank?
-      project.devel( :project => develproject.name ) unless develproject.nil?
-
-      each_user do |user, role|
-        project.person( :userid => user, :role => role )
-      end
-
-      each_group do |group, role|
-        project.group( :groupid => group, :role => role )
-      end
-
-      self.downloads.each do |dl|
-        project.download( :baseurl => dl.baseurl, :metafile => dl.metafile,
-          :mtype => dl.mtype, :arch => dl.architecture.name )
-      end
-
-      repos = repositories.not_remote.sort{ |a,b| b.name <=> a.name }
-      if view == 'flagdetails'
-        flags_to_xml(builder, expand_flags)
-      else
-        FlagHelper.flag_types.each do |flag_name|
-          flaglist = type_flags(flag_name)
-          project.send(flag_name) do
-            flaglist.each do |flag|
-              flag.to_xml(builder)
-            end
-          end unless flaglist.empty?
-        end
-      end
-
-      repos.each do |repo|
-        params = {}
-        params[:name]        = repo.name
-        params[:rebuild]     = repo.rebuild     if repo.rebuild
-        params[:block]       = repo.block       if repo.block
-        params[:linkedbuild] = repo.linkedbuild if repo.linkedbuild
-        project.repository( params ) do |r|
-          repo.release_targets.each do |rt|
-            params = {}
-            params[:project]    = rt.target_repository.project.name
-            params[:repository] = rt.target_repository.name
-            params[:trigger]    = rt.trigger    unless rt.trigger.blank?
-            r.releasetarget( params )
-          end
-          if repo.hostsystem
-            r.hostsystem( :project => repo.hostsystem.project.name, :repository => repo.hostsystem.name )
-          end
-          repo.path_elements.includes(:link).each do |pe|
-            if pe.link.remote_project_name
-              project_name = pe.link.project.name+":"+pe.link.remote_project_name
-            else
-              project_name = pe.link.project.name
-            end
-            r.path( :project => project_name, :repository => pe.link.name )
-          end
-          repo.repository_architectures.joins(:architecture).pluck("architectures.name").each do |arch|
-            r.arch arch
-          end
-        end
-      end
-
-      if self.maintained_projects.length > 0
-        project.maintenance do |maintenance|
-          self.maintained_projects.each do |mp|
-            maintenance.maintains(:project => mp.name)
-          end
-        end
-      end
-
-    end
-    logger.debug "----------------- end rendering project #{name} ------------------------"
-
-    return builder.doc.to_xml :indent => 2, :encoding => 'UTF-8', 
-                               :save_with => Nokogiri::XML::Node::SaveOptions::NO_DECLARATION |
-                                             Nokogiri::XML::Node::SaveOptions::FORMAT
   end
 
   def to_axml_id
     return "<project name='#{::Builder::XChar.encode(name)}'/>"
   end
-
 
   def rating( user_id=nil )
     score = 0
@@ -1280,263 +998,14 @@ class Project < ActiveRecord::Base
     return packages
   end
 
-  def extract_maintainer(rootproject, pkg, rolefilter, objfilter=nil)
-    return nil unless pkg
-    return nil unless Package.check_access?(pkg)
-    m = {}
-
-    m[:rootproject] = rootproject.name
-    m[:project] = pkg.project.name
-    m[:package] = pkg.name
-    m[:filter] = rolefilter
-
-    # construct where condition
-    sql = nil
-    if rolefilter.length > 0
-      rolefilter.each do |rf|
-       if sql.nil?
-         sql = "( "
-       else
-         sql << " OR "
-       end
-       role = Role.find_by_title!(rf)
-       sql << "role_id = " << role.id.to_s
-      end
-    else
-      # match all roles
-      sql = "( 1 "
-    end
-    sql << " )"
-    usersql = groupsql = sql
-    usersql  = sql << " AND bs_user_id = " << objfilter.id.to_s  if objfilter.class == User
-    groupsql = sql << " AND bs_group_id = " << objfilter.id.to_s if objfilter.class == Group
-
-    # lookup
-    pkg.package_user_role_relationships.where(usersql).each do |p|
-      m[:users] ||= {}
-      m[:users][p.role.title] ||= []
-      m[:users][p.role.title] << p.user.login
-    end unless objfilter.class == Group
-
-    pkg.package_group_role_relationships.where(groupsql).each do |p|
-      m[:groups] ||= {}
-      m[:groups][p.role.title] ||= []
-      m[:groups][p.role.title] << p.group.title
-    end unless objfilter.class == User
-
-    # did it it match? if not fallback to project level
-    unless m[:users] or m[:groups]
-      m[:package] = nil
-      pkg.project.project_user_role_relationships.where(usersql).each do |p|
-        m[:users] ||= {}
-        m[:users][p.role.title] ||= []
-        m[:users][p.role.title] << p.user.login
-      end unless objfilter.class == Group
-
-      pkg.project.project_group_role_relationships.where(groupsql).each do |p|
-        m[:groups] ||= {}
-        m[:groups][p.role.title] ||= []
-        m[:groups][p.role.title] << p.group.title
-      end unless objfilter.class == User
-    end
-    # still not matched? Ignore it
-    return nil unless  m[:users] or m[:groups]
-
-    return m
-  end
-
-  private :extract_maintainer
-
-  def lookup_package_owner(pkg, owner, limit, devel, filter, deepest, already_checked={})
-    return nil, limit, already_checked if already_checked[pkg.id]
-
-    # optional check for devel package instance first
-    m = nil
-    m = extract_maintainer(self, pkg.resolve_devel_package, filter, owner) if devel == true
-    m = extract_maintainer(self, pkg, filter, owner) unless m
-
-    already_checked[pkg.id] = 1
-
-    # no match, loop about projects below with this package container name
-    unless m
-      pkg.project.expand_all_projects.each do |prj|
-        p = prj.packages.find_by_name(pkg.name )
-        next if p.nil? or already_checked[p.id]
-       
-        already_checked[p.id] = 1
-
-        m = extract_maintainer(self, p.resolve_devel_package, filter, owner) if devel == true
-        m = extract_maintainer(self, p, filter, owner) unless m
-        if m
-          break unless deepest
-        end
-      end
-    end
-
-    # found entry
-    return m, (limit-1), already_checked
-  end
-
-  private :lookup_package_owner
-
-  def find_containers_without_definition(devel=true, filter=["maintainer","bugowner"] )
-    projects=self.expand_all_projects
-
-    roles=[]
-    filter.each do |f|
-      roles << Role.find_by_title!(f)
-    end
-
-    # fast find packages with defintions
-    # user in package object
-    defined_packages = Package.joins(:package_user_role_relationships).where("db_project_id in (?) AND package_user_role_relationships.role_id in (?)", projects, roles).pluck(:name)
-    # group in package object
-    defined_packages += Package.joins(:package_group_role_relationships).where("db_project_id in (?) AND package_group_role_relationships.role_id in (?)", projects, roles).pluck(:name)
-    # user in project object
-    Project.joins(:project_user_role_relationships).where("projects.id in (?) AND project_user_role_relationships.role_id in (?)", projects, roles).each do |prj|
-      defined_packages += prj.packages.map{ |p| p.name }
-    end
-    # group in project object
-    Project.joins(:project_group_role_relationships).where("projects.id in (?) AND project_group_role_relationships.role_id in (?)", projects, roles).each do |prj|
-      defined_packages += prj.packages.map{ |p| p.name }
-    end
-    if devel == true
-      #FIXME add devel packages, but how do recursive lookup fast in SQL?
-    end
-    defined_packages.uniq!
-
-    all_packages = Package.where("db_project_id in (?)", projects).pluck(:name)
-  
-    undefined_packages = all_packages - defined_packages 
-    maintainers=[]
-
-    undefined_packages.each do |p|
-      next if p =~ /\A_product:\w[-+\w\.]*\z/
-
-      pkg = self.find_package(p)
-      
-      m = {}
-      m[:rootproject] = self.name
-      m[:project] = pkg.project.name
-      m[:package] = pkg.name
-
-      maintainers << m
-    end
-
-    return maintainers
-  end
-
-  def find_containers(owner, devel=true, filter=["maintainer","bugowner"] )
-    projects=self.expand_all_projects
-
-    roles=[]
-    filter.each do |f|
-      roles << Role.find_by_title!(f)
-    end
-
-    found_packages = []
-    found_projects = []
-    # fast find packages with defintions
-    if owner.class == User
-      # user in package object
-      found_packages = PackageUserRoleRelationship.where(:role_id => roles, :bs_user_id => owner, :db_package_id => Package.where(:db_project_id => projects)).pluck(:db_package_id)
-      # user in project object
-      ProjectUserRoleRelationship.where(:role_id => roles, :bs_user_id => owner, :db_project_id => Project.where(:id => projects)).each do |prjrel|
-        found_projects << prjrel.db_project_id
-      end
-    elsif owner.class == Group
-      # group in package object
-      found_packages = PackageGroupRoleRelationship.where(:role_id => roles, :bs_group_id => owner, :db_package_id => Package.where(:db_project_id => projects)).pluck(:db_package_id)
-      # group in project object
-      ProjectGroupRoleRelationship.where(:role_id => roles, :bs_group_id => owner, :db_project_id => Project.where(:id => projects)).each do |prjrel|
-        found_projects << prjrel.db_project_id
-      end
-    else
-      raise "illegal object handed to find_containers"
-    end
-    if devel == true
-      #FIXME add devel packages, but how do recursive lookup fast in SQL?
-    end
-    found_packages.uniq!
-
-    maintainers=[]
-
-    found_projects.each do |id|
-      prj = Project.find_by_id(id)
-      maintainers << { :rootproject => self.name, :project => prj.name }
-    end
-    found_packages.each do |id|
-      pkg = Package.find_by_id(id)
-      maintainers << { :rootproject => self.name, :project => pkg.project.name, :package => pkg.name }
-    end
-
-    return maintainers
-  end
-
-  def find_assignees(binary_name, limit=1, devel=true, filter=["maintainer","bugowner"], webui_mode=false)
-    instances_without_definition=[]
-    maintainers=[]
-    pkg=nil
-    projects=self.expand_all_projects
-
-    match_all = (limit == 0)
-    deepest = (limit < 0)
-
-    # binary search via all projects
-    prjlist = projects.map { |p| "@project='#{CGI.escape(p.name)}'" }
-    path = "/search/published/binary/id?match=(@name='"+CGI.escape(binary_name)+"'"
-    path += "+and+("
-    path += prjlist.join("+or+")
-    path += "))"
-    answer = Suse::Backend.post path, nil
-    data = Xmlhash.parse(answer.body)
-
-    # found binary package?
-    return [] if data["matches"].to_i == 0
-
-    already_checked = {}
-    deepest_match = nil
-    projects.each do |prj| # project link order
-      data.elements("binary").each do |b| # no order
-        next unless b["project"] == prj.name
-
-        pkg = prj.packages.find_by_name( b["package"] )
-        next if pkg.nil?
-
-        # the "" means any matching relationships will get taken
-        m, limit, already_checked = lookup_package_owner(pkg, "", limit, devel, filter, deepest, already_checked)
-
-        unless m
-          # collect all no matched entries
-          m = { :rootproject => self.name, :project => pkg.project.name, :package => pkg.name, :filter => filter }
-          instances_without_definition << m
-          next
-        end
-
-        # remember as deepest candidate
-        if deepest == true
-          deepest_match = m
-          next
-        end
-
-        # add matching entry
-        maintainers << m
-        limit = limit - 1
-        return maintainers if limit < 1 and not match_all
-      end
-    end
-
-    return instances_without_definition if webui_mode and maintainers.length < 1
-
-    maintainers << deepest_match if deepest_match
-
-    return maintainers
-  end
-
   def project_type
+    return @project_type if @project_type
     mytype = DbProjectType.find(type_id) if type_id
-    return 'standard' unless mytype
-    return mytype.name
+    if mytype
+      return @project_type = mytype.name
+    else
+      return @project_type = 'standard'
+    end
   end
 
   def set_project_type(project_type_name)
@@ -1670,38 +1139,6 @@ class Project < ActiveRecord::Base
 
   private :bsrequest_repos_map
 
-  def user_has_role?(user, role)
-    return true if self.project_user_role_relationships.where(role_id: role.id, bs_user_id: user.id).first
-    return !self.project_group_role_relationships.where(role_id: role).joins(:groups_users).where(groups_users: { user_id: user.id }).first.nil?
-  end
-
-  def remove_role(what, role)
-    check_write_access!
-
-    if what.kind_of? Group
-      rel = self.project_group_role_relationships.where(bs_group_id: what.id)
-    else
-      rel = self.project_user_role_relationships.where(bs_user_id: what.id)
-    end
-    rel = rel.where(role_id: role.id) if role
-    self.transaction do
-      rel.delete_all
-      write_to_backend
-    end
-  end
- 
-  def add_role(what, role)
-    check_write_access!
-
-    self.transaction do
-      if what.kind_of? Group
-        self.project_group_role_relationships.create!(role: role, group: what)
-      else
-        self.project_user_role_relationships.create!(role: role, user: what)
-      end
-      write_to_backend
-    end
-  end
 
   def self.valid_name?(name)
     return false unless name.kind_of? String
@@ -1714,80 +1151,6 @@ class Project < ActiveRecord::Base
 
   def valid_name
     errors.add(:name, "is illegal") unless Project.valid_name?(self.name)
-  end
-
-  def update_patchinfo(patchinfo, opts = {})
-    check_write_access!
-
-    opts[:enfore_issue_update] ||= false
-
-    # collect bugnumbers from diff
-    self.packages.each do |p|
-      # create diff per package
-      next if p.package_kinds.find_by_kind 'patchinfo'
-
-      p.package_issues.each do |i|
-        if i.change == "added"
-          unless patchinfo.has_element?("issue[(@id='#{i.issue.name}' and @tracker='#{i.issue.issue_tracker.name}')]")
-            e = patchinfo.add_element "issue"
-            e.set_attribute "tracker", i.issue.issue_tracker.name
-            e.set_attribute "id"     , i.issue.name
-            patchinfo.category.text = "security" if i.issue.issue_tracker.kind == "cve"
-          end
-        end
-      end
-    end
-
-    # update informations of empty issues
-    patchinfo.each_issue do |i|
-      if i.text.blank? and not i.name.blank?
-        issue = Issue.find_or_create_by_name_and_tracker(i.name, i.tracker)
-        if issue
-          if opts[:enfore_issue_update]
-            # enforce update from issue server
-            issue.fetch_updates()
-          end
-          i.text = issue.summary
-        end
-      end
-    end
-
-    return patchinfo
-  end
-
-  def create_patchinfo_from_request(req)
-    check_write_access!
-
-    patchinfo = Package.new(:name => "patchinfo", :title => "Patchinfo", :description => "Collected packages for update")
-    self.packages << patchinfo
-    patchinfo.add_flag("build", "enable", nil, nil)
-    patchinfo.add_flag("useforbuild", "disable", nil, nil)
-    patchinfo.add_flag("publish", "enable", nil, nil) unless self.flags.find_by_flag_and_status("access", "disable")
-    patchinfo.store
-    
-    # create patchinfo XML file
-    node = Nokogiri::XML::Builder.new
-    attrs = { }
-    if self.project_type.to_s == "maintenance_incident"
-      # this is a maintenance incident project, the sub project name is the maintenance ID
-      attrs[:incident] = self.name.gsub(/.*:/, '')
-    end
-    
-    description = req.description || ''
-    node.patchinfo(attrs) do |n|
-      n.packager    req.creator
-      n.category    "recommended" # update_patchinfo may switch to security
-      n.rating      "low"
-      n.summary     description.split(/\n|\r\n/)[0] # first line only
-      n.description req.description
-    end
-    data = ActiveXML::Node.new( node.doc.to_xml )
-    data = self.update_patchinfo( data, enfore_issue_update: true )
-    p = { :user => User.current.login, :comment => "generated by request id #{req.id} accept call" }
-    patchinfo_path = "/source/#{CGI.escape(patchinfo.project.name)}/patchinfo/_patchinfo"
-    patchinfo_path << Suse::Backend.build_query_from_hash(p, [:user, :comment])
-    Suse::Backend.put( patchinfo_path, data.dump_xml )
-    patchinfo.sources_changed
   end
 
   # updates packages automatically generated in the backend after submitting a product file
@@ -1814,4 +1177,23 @@ class Project < ActiveRecord::Base
     end
   end
 
+  def request_ids_by_class
+    rel = BsRequest.collection(project: name, states: ['review'], roles: ['reviewer'])
+    reviews = rel.pluck("bs_requests.id")
+
+    rel = BsRequest.collection(project: name, states: ['new'], roles: ['target'])
+    targets = rel.pluck("bs_requests.id")
+
+    rel = BsRequest.collection(project: name, states: ['new'], roles: ['source'], types: ['maintenance_incident'])
+    incidents = rel.pluck("bs_requests.id")
+
+    if project_type == "maintenance"
+      rel = BsRequest.collection(project: name, states: ['new'], roles: ['source'], types: ['maintenance_release'], subprojects: true)
+      maintenance_release = rel.pluck("bs_requests.id")
+    else
+      maintenance_release = []
+    end
+
+    { 'reviews' => reviews, 'targets' => targets, 'incidents' => incidents, 'maintenance_release' => maintenance_release }
+  end
 end

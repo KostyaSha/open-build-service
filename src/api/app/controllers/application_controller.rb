@@ -19,6 +19,10 @@ class ApplicationController < ActionController::API
     setup "invalid_parameter"
   end
 
+  class InvalidProjectName < APIException
+    setup 400
+  end
+
   include ActionController::ImplicitRender
   include ActionController::MimeResponds
 
@@ -72,7 +76,7 @@ class ApplicationController < ActionController::API
       next if value.nil?
       next if key == 'xmlhash' # perfectly fine
       if !value.kind_of? String
-        raise InvalidParameterError, "Parameter #{key} has non String class #{key.class}"
+        raise InvalidParameterError, "Parameter #{key} has non String class #{value.class}"
       end
     end
   end
@@ -281,14 +285,19 @@ class ApplicationController < ActionController::API
     return false
   end
 
-  hide_action :setup_backend  
+  def require_valid_project_name
+    required_parameters :project
+    raise InvalidProjectName.new("invalid project name '#{params[:project]}'") unless valid_project_name?(params[:project])
+    # important because otherwise the filter chain is stopped
+    return true
+  end
+
   def setup_backend
     # initialize backend on every request
     Suse::Backend.source_host = CONFIG['source_host']
     Suse::Backend.source_port = CONFIG['source_port']
   end
 
-  hide_action :add_api_version
   def add_api_version
     response.headers["X-Opensuse-APIVersion"] = "#{CONFIG['version']}"
   end
@@ -352,7 +361,6 @@ class ApplicationController < ActionController::API
     @volleyfile.close
   end
 
-  hide_action :download_request
   def download_request
     file = Tempfile.new 'volley', :encoding => 'ascii-8bit'
     b = request.body
@@ -381,19 +389,25 @@ class ApplicationController < ActionController::API
 
     path ||= get_request_path
 
-    case request.method.to_s.downcase
-    when "get"
+    if request.get? || request.head?
       forward_from_backend( path )
       return
-    when "post"
-      file = download_request
-      response = Suse::Backend.post( path, file )
-      file.close!
-    when "put"
+    end
+    case request.method_symbol
+    when :post
+      # for form data we don't need to download anything
+      if request.form_data?
+        response = Suse::Backend.post( path, '', { 'Content-Type' => 'application/x-www-form-urlencoded' } )
+      else
+        file = download_request
+        response = Suse::Backend.post( path, file )
+        file.close!
+      end
+    when :put
       file = download_request
       response = Suse::Backend.put( path, file )
       file.close!
-    when "delete"
+    when :delete
       response = Suse::Backend.delete( path )
     end
 
@@ -416,8 +430,13 @@ class ApplicationController < ActionController::API
     render_error status: 408, errorcode: "timeout_error", message: exception.message
   end
 
+  rescue_from ActiveXML::ParseError do |exception|
+    render_error status: 400, errorcode: 'invalid_xml', message: "Invalid XML"
+  end
+
   rescue_from APIException do |exception|
-    logger.debug "#{exception.class.name} #{exception.message}"
+    bt = exception.backtrace.join("\n")
+    logger.debug "#{exception.class.name} #{exception.message} #{bt}"
     message = exception.message
     if message.blank? || message == exception.class.name
       message = exception.default_message
@@ -561,9 +580,7 @@ class ApplicationController < ActionController::API
     }
     opt = defaults.merge opt
     unless params.has_key? opt[:cmd_param]
-      render_error :status => 400, :errorcode => "missing_parameter",
-        :message => "Missing parameter '#{opt[:cmd_param]}'"
-      return
+      raise MissingParameterError.new "Missing parameter '#{opt[:cmd_param]}'"
     end
 
     cmd_handler = "#{params[:action]}_#{params[opt[:cmd_param]]}"
@@ -591,7 +608,7 @@ class ApplicationController < ActionController::API
       missing << param unless params.has_key? param
     end
 
-    if missing.length > 0
+    unless missing.empty?
       render_error :status => 400, :errorcode => "missing_query_parameters",
         :message => "Missing query parameters: #{missing.join ', '}"
     end

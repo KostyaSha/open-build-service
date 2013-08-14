@@ -1846,6 +1846,49 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
   end
 
+  def test_auto_accept_request
+    prepare_request_with_user "tom", "thunder"
+    # create request with auto accept in far future
+    req = "<request>
+            <action type='delete'>
+              <target project='home:Iggy' package='TestPack' />
+            </action>
+            <accept_at>2113-07-25 14:00:21.000000000 Z</accept_at>
+            <description>SUBMIT</description>
+            <state who='Iggy' name='new'/>
+          </request>"
+    post "/request?cmd=create", req
+    # user has no write permission in target
+    assert_response 403
+    assert_xml_tag(:tag => "status", :attributes => {:code => 'post_request_no_permission'})
+
+    # works as user with write permission in target
+    prepare_request_with_user "Iggy", "asdfasdf"
+    post "/request?cmd=create", req
+    assert_response :success
+    assert_xml_tag(:tag => "request")
+    node = ActiveXML::Node.new(@response.body)
+    assert node.has_attribute?(:id)
+    id = node.value(:id)
+    # correct rendered
+    get "/request/#{id}"
+    assert_response :success
+    assert_xml_tag(:tag => "accept_at", :content => "2113-07-25 14:00:21 UTC")
+
+    # but not when the time is in the past
+    req = "<request>
+            <action type='delete'>
+              <target project='home:Iggy' package='TestPack' />
+            </action>
+            <accept_at>2009-07-25 14:00:21.000000000 Z</accept_at>
+            <description>SUBMIT</description>
+            <state who='Iggy' name='new'/>
+          </request>"
+    post "/request?cmd=create", req
+    assert_response 400
+    assert_xml_tag(:tag => "status", :attributes => {:code => 'request_save_error'})
+  end
+
   def test_branch_version_update_and_submit_request_back
     # branch a package which does not exist in project, but project is linked
     prepare_request_with_user "tom", "thunder"
@@ -2058,6 +2101,56 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
     delete "/source/home:Iggy:Test"
     assert_response :success
+  end
+
+  # bugreport bnc #833616
+  def test_permission_check_for_package_only_permissions
+    prepare_request_with_user "Iggy", "asdfasdf"
+
+    # validate setup for this check
+    get "/source/home:Iggy/_meta"
+    assert_response :success
+    assert_no_xml_tag(:tag => "person", :attributes => {:userid => "fred", :role => "maintainer"})
+    get "/source/home:Iggy/TestPack/_meta"
+    assert_response :success
+    assert_xml_tag(:tag => "person", :attributes => {:userid => "fred", :role => "maintainer"})
+
+    # create request for package, which is maintained by fred
+    post "/request?cmd=create", '<request>
+                                   <action type="add_role">
+                                     <target project="home:Iggy" package="TestPack"/>
+                                     <person name="adrian" role="maintainer"/>
+                                   </action>
+                                   <state name="new" />
+                                 </request>'
+    assert_response :success
+    node = ActiveXML::Node.new(@response.body)
+    assert node.has_attribute?(:id)
+    id = node.value('id')
+
+    # decline as fred
+    prepare_request_with_user "fred", "geröllheimer"
+    post "/request/#{id}?cmd=changestate&newstate=declined"
+    assert_response :success
+
+    # create request for project, where fred has no permissions
+    prepare_request_with_user "Iggy", "asdfasdf"
+    post "/request?cmd=create", '<request>
+                                   <action type="add_role">
+                                     <target project="home:Iggy" />
+                                     <person name="adrian" role="maintainer"/>
+                                   </action>
+                                   <state name="new" />
+                                 </request>'
+    assert_response :success
+    node = ActiveXML::Node.new(@response.body)
+    assert node.has_attribute?(:id)
+    id = node.value('id')
+
+    # decline as fred
+    prepare_request_with_user "fred", "geröllheimer"
+    post "/request/#{id}?cmd=changestate&newstate=declined"
+    assert_response 403
   end
 
   def test_invalid_names

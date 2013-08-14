@@ -2637,10 +2637,10 @@ sub getprojpack {
     if ($cgi->{'withconfig'}) {
       my $config = readstr("$projectsdir/$projid.conf", 1);
       if ($config) {
-	my $s1 = '^\s*macros:\s*$.*?^\s*:macros\s*$';
-	my $s2 = '^\s*macros:\s*$.*\Z';
-	$config =~ s/$s1//gmsi;
-	$config =~ s/$s2//gmsi;
+	#my $s1 = '^\s*macros:\s*$.*?^\s*:macros\s*$';
+	#my $s2 = '^\s*macros:\s*$.*\Z';
+	#$config =~ s/$s1//gmsi;
+	#$config =~ s/$s2//gmsi;
 	$jinfo->{'config'} = $config unless $config =~ /^\s*$/s;
       }
     }
@@ -2915,11 +2915,39 @@ sub getprojpack {
           };
 	  if ($@) {
 	    my $err = $@;
-	    $err =~ s/\n$//s;
+	    chomp $err;
 	    $pinfo->{'error'} = "bad patchinfo: $err";
 	    next;
 	  }
 	  $pinfo->{'patchinfo'} = $patchinfo;
+	  if (($enable && %$enable) || ($disable && %$disable)) {
+	    my @dinfo = ();
+	    for my $repo (@{$proj->{'repository'} || []}) {
+	      my $repoid = $repo->{'name'};
+	      next if $repoids && !$repoids->{$repoid};
+	      if ((!$disable || $disable->{$repoid}) && !(!$enable || $enable->{$repoid})) {
+	        push @dinfo, {'repository' => $repoid, 'error' => 'disabled'};
+		next;
+	      }
+	    }
+	    $pinfo->{'info'} = \@dinfo if @dinfo;
+	  }
+	} elsif ($files->{'_channel'}) {
+	  my $channel = repreadxml($rev, '_channel', $files->{'_channel'}, $BSXML::channel, 1);
+          if (!$channel) {
+	    $pinfo->{'error'} = "bad channel data";
+	    next;
+	  }
+          eval {
+	    BSVerify::verify_channel($channel);
+          };
+	  if ($@) {
+	    my $err = $@;
+	    chomp $err;
+	    $pinfo->{'error'} = "bad channel: $err";
+	    next;
+	  }
+          $pinfo->{'channel'} = $channel;
 	  if (($enable && %$enable) || ($disable && %$disable)) {
 	    my @dinfo = ();
 	    for my $repo (@{$proj->{'repository'} || []}) {
@@ -5922,6 +5950,7 @@ sub getlogfile {
   }
 
   my @args;
+  push @args, 'last' if $cgi->{'last'};
   push @args, 'nostream' if $cgi->{'nostream'};
   push @args, "start=$cgi->{'start'}" if defined $cgi->{'start'};
   push @args, "end=$cgi->{'end'}" if defined $cgi->{'end'};
@@ -7844,7 +7873,7 @@ my $dispatches = [
   '/build/$project/$repository/$arch/$package_repository view:? binary:filename* nometa:bool? nosource:bool?' => \&getbinarylist,
   'POST:/build/$project/$repository/$arch/$package_repository/_buildinfo add:* debug:bool?' => \&getbuildinfo_post,
   '/build/$project/$repository/$arch/$package/_buildinfo add:* internal:bool? debug:bool?' => \&getbuildinfo,
-  '/build/$project/$repository/$arch/$package/_log nostream:bool? start:intnum? end:num? view:?' => \&getlogfile,
+  '/build/$project/$repository/$arch/$package/_log nostream:bool? last:bool? start:intnum? end:num? view:?' => \&getlogfile,
   '/build/$project/$repository/$arch/$package/_reason' => \&getbuildreason,
   '/build/$project/$repository/$arch/$package/_status' => \&getbuildstatus,
   '/build/$project/$repository/$arch/$package/_history limit:num?' => \&getbuildhistory,
@@ -7875,7 +7904,7 @@ my $dispatches_ajax = [
   '/ajaxstatus' => \&getajaxstatus,
   '/build/$project/_result oldstate:md5? view:resultview* repository* arch* package* code:*' => \&getresult,
   '/build/$project/$repository/$arch package* view:?' => \&getpackagelist_build,
-  '/build/$project/$repository/$arch/$package/_log nostream:bool? start:intnum? end:num?' => \&getlogfile,
+  '/build/$project/$repository/$arch/$package/_log nostream:bool? last:bool? start:intnum? end:num?' => \&getlogfile,
   '/build/$project/$repository/$arch/$package_repository view:? binary:filename* nometa:bool? nosource:bool?' => \&getbinarylist,
   '/getbinaries $project $repository $arch binaries: nometa:bool? raw:bool?' => \&worker_getbinaries,
   '/lastevents $filter:* start:num? obsname:?' => \&worker_lastevents,

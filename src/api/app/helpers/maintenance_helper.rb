@@ -28,23 +28,12 @@ module MaintenanceHelper
         tprj.flags.create( :flag => 'access', :status => "disable" )
       end
       # take over roles from maintenance project
-      maintenanceProject.project_user_role_relationships.each do |r| 
-        ProjectUserRoleRelationship.create(
-              :user => r.user,
-              :role => r.role,
-              :project => tprj
-            )
-      end
-      maintenanceProject.project_group_role_relationships.each do |r| 
-        ProjectGroupRoleRelationship.create(
-              :group => r.group,
-              :role => r.role,
-              :project => tprj
-            )
+      maintenanceProject.relationships.each do |r| 
+        tprj.relationships.new(user: r.user, role: r.role, group: r.group)
       end
       # set default bugowner if missing
-      bugowner = Role.get_by_title("bugowner")
-      unless tprj.project_user_role_relationships.where("role_id = ?", bugowner.id).first
+      bugowner = Role.rolecache['bugowner']
+      unless tprj.relationships.users.where("role_id = ?", bugowner.id).exists?
         tprj.add_user( @http_user, bugowner )
       end
       # and write it
@@ -200,7 +189,7 @@ module MaintenanceHelper
       end
     end
 
-    unless @packages.length > 0
+    if @packages.empty?
       return { :status => 403, :errorcode => "not_found",
         :message => "no packages found by search criteria" }
     end
@@ -449,7 +438,7 @@ module MaintenanceHelper
       end
       add_repositories = true # new projects shall get repositories
       Project.transaction do
-        tprj = Project.new :name => target_project, :title => title, :description => description
+        tprj = Project.create :name => target_project, :title => title, :description => description
         tprj.add_user User.current, "maintainer"
         tprj.flags.create( :flag => 'build', :status => "disable" ) if extend_names
         tprj.flags.create( :flag => 'access', :status => "disable" ) if noaccess
@@ -554,8 +543,7 @@ module MaintenanceHelper
         # copy project local linked packages
         Suse::Backend.post "/source/#{tpkg.project.name}/#{tpkg.name}?cmd=copy&oproject=#{CGI.escape(p[:link_target_project].name)}&opackage=#{CGI.escape(p[:package].name)}&user=#{CGI.escape(User.current.login)}", nil
         # and fix the link
-        link = Suse::Backend.get "/source/#{tpkg.project.name}/#{tpkg.name}/_link"
-        ret = ActiveXML::Node.new(link.body)
+        ret = ActiveXML::Node.new(tpkg.source_file("_link"))
         ret.delete_attribute('project') # its a local link, project name not needed
         linked_package = p[:link_target_package]
         linked_package = params[:target_package] if params[:target_package] and params[:package] == ret.package  # user enforce a rename of base package
@@ -637,10 +625,10 @@ module MaintenanceHelper
     # detect local links
     link = nil
     begin
-      link = Suse::Backend.get "/source/#{URI.escape(sourcePackage.project.name)}/#{URI.escape(sourcePackage.name)}/_link"
+      link = sourcePackage.source_file("_link")
     rescue ActiveXML::Transport::Error
     end
-    if link and ret = ActiveXML::Node.new(link.body) and (ret.project.nil? or ret.project == sourcePackage.project.name)
+    if link and ret = ActiveXML::Node.new(link) and (ret.project.nil? or ret.project == sourcePackage.project.name)
       ret.delete_attribute('project') # its a local link, project name not needed
       ret.set_attribute('package', ret.package.gsub(/\..*/,'') + targetPackageName.gsub(/.*\./, '.')) # adapt link target with suffix
       link_xml = ret.dump_xml

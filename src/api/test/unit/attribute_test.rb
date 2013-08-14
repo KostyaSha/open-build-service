@@ -17,8 +17,8 @@ class AttributeTest < ActiveSupport::TestCase
                <modifiable_by user='fred' group='test_group' />
             </namespace>"
 
-    xml = REXML::Document.new( axml )
-    assert_equal true, AttribNamespace.create(:name => "NewNamespace").update_from_xml(xml.root)
+    xml = Xmlhash.parse( axml )
+    assert_equal true, AttribNamespace.create(:name => "NewNamespace").update_from_xml(xml)
     @ans = AttribNamespace.find_by_name( "NewNamespace" )
 
     #check results
@@ -26,7 +26,7 @@ class AttributeTest < ActiveSupport::TestCase
     assert_equal "NewNamespace", @ans.name
 
     # Update a namespace with same content
-    assert_equal true, @ans.update_from_xml(xml.root)
+    assert_equal true, @ans.update_from_xml(xml)
     @newans = AttribNamespace.find_by_name( "NewNamespace" )
     assert_equal @newans, @ans
 
@@ -36,9 +36,9 @@ class AttributeTest < ActiveSupport::TestCase
                <modifiable_by user='fredlibs' group='test_group' />
             </namespace>"
 
-    xml = REXML::Document.new( axml )
+    xml = Xmlhash.parse( axml )
 
-    assert @ans.update_from_xml(xml.root)
+    assert @ans.update_from_xml(xml)
     @newans = AttribNamespace.find_by_name( "NewNamespace" )
     assert_equal "NewNamespace", @newans.name
   end
@@ -52,8 +52,8 @@ class AttributeTest < ActiveSupport::TestCase
                <modifiable_by user='fred' group='test_group' role='maintainer' />
             </attribute>"
 
-    xml = REXML::Document.new( axml )
-    assert AttribType.create(:name => "NewAttribute", :attrib_namespace => @attrib_ns).update_from_xml(xml.root)
+    xml = Xmlhash.parse( axml )
+    assert AttribType.create(:name => "NewAttribute", :attrib_namespace => @attrib_ns).update_from_xml(xml)
 
     @atro = @attrib_ns.attrib_types.where(:name=>"NewAttribute").first
     assert_not_nil @atro
@@ -79,9 +79,9 @@ class AttributeTest < ActiveSupport::TestCase
                </allowed>
             </attribute>"
 
-    xml = REXML::Document.new( axml )
+    xml = Xmlhash.parse( axml )
 
-    assert @at.update_from_xml(xml.root)
+    assert @at.update_from_xml(xml)
     assert_equal "NewAttribute", @at.name
     assert_equal "OBS", @at.attrib_namespace.name
     assert_equal 67, @at.value_count
@@ -100,8 +100,8 @@ class AttributeTest < ActiveSupport::TestCase
                </allowed>
             </attribute>"
 
-    xml = REXML::Document.new( axml )
-    assert @at.update_from_xml(xml.root)
+    xml = Xmlhash.parse( axml )
+    assert @at.update_from_xml(xml)
     assert_equal "NewAttribute", @at.name
     assert_equal "OBS", @at.attrib_namespace.name
     assert_nil @at.value_count
@@ -110,8 +110,8 @@ class AttributeTest < ActiveSupport::TestCase
     assert_equal 1, @at.attrib_type_modifiable_bies.length
     # with empty content
     axml = "<attribute namespace='OBS' name='NewAttribute' />"
-    xml = REXML::Document.new( axml )
-    assert @at.update_from_xml(xml.root)
+    xml = Xmlhash.parse( axml )
+    assert @at.update_from_xml(xml)
     assert_equal "NewAttribute", @at.name
     assert_equal "OBS", @at.attrib_namespace.name
     assert_nil @at.value_count

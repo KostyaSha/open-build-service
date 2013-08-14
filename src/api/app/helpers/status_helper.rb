@@ -13,17 +13,17 @@ end
 class PackInfo
   attr_accessor :devel_project, :devel_package
   attr_accessor :srcmd5, :verifymd5, :changesmd5, :maxmtime, :error, :link
-  attr_reader :name, :project, :key, :db_package_id
+  attr_reader :name, :project, :key, :package_id
   attr_accessor :develpack
   attr_accessor :failed_comment, :upstream_version, :upstream_url, :declined_request
   attr_reader :version, :release, :versiontime
   attr_reader :failed
 
-  def initialize(db_pack)
-    @project = db_pack.project.name
+  def initialize(db_pack, project_name)
+    @project = project_name
     @name = db_pack.name
     # we don't store the full package object as it can become huge
-    @db_package_id = db_pack.id
+    @package_id = db_pack.id
     @key = @project + "/" + name
     @devel_project = nil
     @devel_package = nil
@@ -34,6 +34,18 @@ class PackInfo
     # the last built version wins (repos may have different versions)
     @versiontime = nil
     @failed = Hash.new
+
+    # only set from status controller
+    @groups = Array.new
+    @persons = Array.new
+  end
+
+  def add_person(login, role)
+    @persons << [login, role]
+  end
+ 
+  def add_group(title, role)
+    @groups << [title, role]
   end
 
   def to_xml(options = {})
@@ -59,17 +71,17 @@ class PackInfo
           develpack.to_xml(:builder => xml)
         end
       end
-      db_pack = Package.find(@db_package_id)
+      
       xml.persons do
-        db_pack.each_user do |ulogin, role_name|
+        @persons.each do |ulogin, role_name|
           xml.person(:userid => ulogin, :role => role_name)
         end
-      end unless db_pack.package_user_role_relationships.empty?
+      end unless @persons.empty?
       xml.groups do
-        db_pack.each_group do |gtitle, rolename|
+        @groups.each do |gtitle, rolename|
           xml.group(:groupid => gtitle, :role => rolename)
         end
-      end unless db_pack.package_group_role_relationships.empty?
+      end unless @groups.empty?
 
       if @error then
         xml.error(error)
@@ -236,7 +248,8 @@ class ProjectStatusHelper
   end
 
   def self.add_recursively(mypackages, projects, dbpack)
-    pack = PackInfo.new(dbpack)
+    projects[dbpack.db_project_id] ||= Project.find(dbpack.db_project_id).name
+    pack = PackInfo.new(dbpack, projects[dbpack.db_project_id])
     return if mypackages.has_key? pack.key
 
     if dbpack.develpackage
@@ -280,9 +293,8 @@ class ProjectStatusHelper
 
     x = Benchmark.ms do
       projects[dbproj.id] = dbproj.name
-      dbproj.packages.includes(:develpackage).load.each do |dbpack|
+      dbproj.packages.select([:id, :name, :db_project_id, :develpackage_id]).includes(:develpackage).load.each do |dbpack|
         next unless filter_by_package_name(dbpack.name)
-        dbpack.resolve_devel_package
         add_recursively(mypackages, projects, dbpack)
       end
     end
@@ -326,7 +338,7 @@ class ProjectStatusHelper
         packages.each do |name|
           pack = Package.find_by_project_and_name(proj, name)
           next unless pack # broken link
-          pack = PackInfo.new(pack)
+          pack = PackInfo.new(pack, proj)
           next if mypackages.has_key? pack.key
           tocheck << pack
           mypackages[pack.key] = pack
@@ -369,7 +381,7 @@ module StatusHelper
     values.sort! { |a, b| a[0] <=> b[0] }
 
     result = Array.new
-    return result unless values.length > 0
+    return result if values.empty?
 
     lastvalue = 0
     now = values[0][0]

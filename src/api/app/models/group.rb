@@ -10,8 +10,7 @@ class Group < ActiveRecord::Base
   end
 
   has_many :groups_users, :foreign_key => 'group_id'
-  has_many :project_group_role_relationships, :foreign_key => 'bs_group_id'
-  has_many :package_group_role_relationships, :foreign_key => 'bs_group_id'
+  has_many :relationships
 
   validates_format_of  :title,
                        :with => %r{\A[\w\.\-]*\z},
@@ -30,48 +29,8 @@ class Group < ActiveRecord::Base
   # groups have a n:m relation to groups
   has_and_belongs_to_many :roles, -> { uniq() }
 
-  class << self
-    def render_group_list(user=nil)
-
-       if user
-         user = User.find_by_login(user)
-         return nil if user.nil?
-         if User.ldapgroup_enabled?
-           begin
-             list = User.render_grouplist_ldap(Group.all, user.login)
-           rescue Exception
-             logger.debug "Error occurred in rendering grouplist in ldap."
-           end
-         else
-           list = user.groups
-         end
-       else
-         if User.ldapgroup_enabled?
-           begin
-             list = User.render_grouplist_ldap(Group.all)
-           rescue Exception
-             logger.debug "Error occurred in rendering grouplist in ldap."
-           end
-         else
-           list = Group.all
-         end
-       end
-
-      builder = Nokogiri::XML::Builder.new
-      builder.directory( :count => list.length ) do |dir|
-        list.each do |g|
-          dir.entry( :name => g.title )
-        end
-      end
-      
-      return builder.doc.to_xml :indent => 2, :encoding => 'UTF-8',
-                                :save_with => Nokogiri::XML::Node::SaveOptions::NO_DECLARATION |
-                                 Nokogiri::XML::Node::SaveOptions::FORMAT
-    end
-
-    def get_by_title(title)
-      find_by_title(title) or raise NotFound.new("Couldn't find Group '#{title}'")
-    end
+  def self.get_by_title(title)
+    find_by_title(title) or raise NotFound.new("Couldn't find Group '#{title}'")
   end
 
   def update_from_xml( xmlhash )
@@ -107,24 +66,6 @@ class Group < ActiveRecord::Base
     end
   end
 
-  def render_axml()
-    builder = Nokogiri::XML::Builder.new
-
-    builder.group() do |group|
-      group.title( self.title )
-
-      group.person do |person|
-        self.groups_users.each do |gu|
-          person.person( :userid => gu.user.login )
-        end
-      end
-    end
-
-    return builder.doc.to_xml :indent => 2, :encoding => 'UTF-8',
-                              :save_with => Nokogiri::XML::Node::SaveOptions::NO_DECLARATION |
-                                            Nokogiri::XML::Node::SaveOptions::FORMAT
-  end
-
   def add_user(user)
     return if self.users.find_by_id user.id # avoid double creation
     gu = GroupsUser.create( user: user, group: self)
@@ -135,12 +76,16 @@ class Group < ActiveRecord::Base
     GroupsUser.delete_all(["user_id = ? AND group_id = ?", user.id, self.id])
   end
 
+  def to_s
+    self.title
+  end
+
   def involved_projects_ids
     # just for maintainer for now.
     role = Role.rolecache["maintainer"]
 
     ### all projects where user is maintainer
-    projects = ProjectGroupRoleRelationship.where(bs_group_id: id, role_id: role.id).select(:db_project_id).map {|ur| ur.db_project_id }
+    projects = Relationship.projects.where(group_id: id, role_id: role.id).pluck(:project_id)
 
     projects.uniq
   end
@@ -160,7 +105,7 @@ class Group < ActiveRecord::Base
     projects << -1 if projects.empty?
 
     # all packages where group is maintainer
-    packages = PackageGroupRoleRelationship.where(bs_group_id: id, role_id: role.id).joins(:package).where("packages.db_project_id not in (?)", projects).select(:db_package_id).map {|ur| ur.db_package_id}
+    packages = Relationship.where(group_id: id, role_id: role.id).joins(:package).where("packages.db_project_id not in (?)", projects).pluck(:package_id)
 
     return Package.where(id: packages).where("db_project_id not in (?)", projects)
   end

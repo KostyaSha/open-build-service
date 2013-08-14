@@ -17,6 +17,7 @@ class BsRequest < ActiveRecord::Base
   has_many :bs_request_histories, :dependent => :delete_all
   has_many :reviews, :dependent => :delete_all
   has_and_belongs_to_many :bs_request_action_groups, join_table: :group_request_requests
+  has_many :comments
   validates_inclusion_of :state, :in => VALID_REQUEST_STATES
   validates :creator, :presence => true
   validate :check_supersede_state
@@ -36,6 +37,13 @@ class BsRequest < ActiveRecord::Base
 
   def state
     read_attribute(:state).to_sym
+  end
+
+  after_rollback :reset_cache
+  after_save :reset_cache
+
+  def reset_cache
+    Rails.cache.delete('xml_bs_request_%d' % id)
   end
 
   def self.new_from_xml(xml)
@@ -100,6 +108,11 @@ class BsRequest < ActiveRecord::Base
       request.description = hashed.value('description')
       hashed.delete('description')
 
+      str = hashed.value('accept_at')
+      request.accept_at = DateTime.parse(str) if str
+      hashed.delete('accept_at')
+      raise SaveError, 'Auto accept time is in the past' if request.accept_at and request.accept_at < DateTime.now
+
       history = hashed.delete('history')
       if history.kind_of? Hash
         history = [history]
@@ -132,7 +145,9 @@ class BsRequest < ActiveRecord::Base
 
   def to_axml
     # FIXME: naming it axml is nonsense if it's just a string
-    render_xml
+    Rails.cache.fetch('xml_bs_request_%d' % id) do
+      render_xml
+    end
   end
 
   def to_axml_id
@@ -159,6 +174,7 @@ class BsRequest < ActiveRecord::Base
       self.bs_request_histories.each do |history|
         history.render_xml(r)
       end
+      r.accept_at self.accept_at unless self.accept_at.nil?
       r.description self.description unless self.description.nil?
     end
     builder.to_xml
@@ -211,20 +227,27 @@ class BsRequest < ActiveRecord::Base
         # if the review is open, there is nothing we have to care about
         return if r.state == :new
       end
-      bs_request_histories.create comment: self.comment, commenter: self.commenter,
-                                  state: self.state, superseded_by: self.superseded_by, created_at: self.updated_at
+      create_history
       self.comment = "removed from group #{group.bs_request.id}"
       self.state = :new
       self.save
     end
   end
 
+  def create_history
+    bs_request_histories.create comment: self.comment, commenter: self.commenter,
+                                state: self.state, superseded_by: self.superseded_by, created_at: self.updated_at
+  end
+
+  def self.find_requests_to_accept
+     self.find(:all, :conditions => ['state = "new" AND accept_at < ?', DateTime.now])
+  end
+
   def change_state(state, opts = {})
     state = state.to_sym
     BsRequest.transaction do
       self.lock!
-      bs_request_histories.create comment: self.comment, commenter: self.commenter, state: self.state,
-                                  superseded_by: self.superseded_by, created_at: self.updated_at
+      create_history
 
       bs_request_actions.each do |a|
         # "inform" the actions
@@ -324,8 +347,7 @@ class BsRequest < ActiveRecord::Base
 
       raise Review::NotFoundError.new unless found
       if go_new_state || state == :superseded
-        bs_request_histories.create comment: self.comment, commenter: self.commenter, state: self.state,
-                                    superseded_by: self.superseded_by, created_at: self.updated_at
+        create_history
 
         if state == :superseded
           self.state = :superseded
@@ -378,8 +400,7 @@ class BsRequest < ActiveRecord::Base
       if !opts[:by_user] && !opts[:by_group] && !opts[:by_project]
         raise InvalidReview.new
       end
-      bs_request_histories.create comment: self.comment, commenter: self.commenter,
-                                  state: self.state, superseded_by: self.superseded_by, created_at: self.updated_at
+      create_history
 
       self.state = 'review'
       self.commenter = User.current.login
@@ -914,7 +935,7 @@ class BsRequest < ActiveRecord::Base
       elsif %w(declined).include? opts[:newstate]
         unless write_permission_in_some_target
           # at least on one target the permission must be granted on decline
-          raise PostRequestNoPermission.new "No permission to change decline request #{self.id}"
+          raise PostRequestNoPermission.new "No permission to decline request #{self.id}"
         end
       else
         raise PostRequestNoPermission.new "No permission to change request #{self.id} state"

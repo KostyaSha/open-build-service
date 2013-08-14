@@ -102,6 +102,8 @@ OBSWebUI::Application.routes.draw do
     post 'package/change_flag/:project/:package' => :change_flag, constraints: cons
     get 'package/import_spec/:project/:package' => :import_spec, constraints: cons
     get "package/files/:project/:package" => :files, constraints: cons
+    get 'package/comments/:project/:package' => :comments, constraints: cons
+    post 'package/comments/:project/:package' => :save_comments, constraints: cons
   end
 
   controller :patchinfo do
@@ -161,6 +163,8 @@ OBSWebUI::Application.routes.draw do
     post 'project/remove_target_request' => :remove_target_request
     post 'project/remove_target' => :remove_target
     get 'project/remove_path_from_target' => :remove_path_from_target
+    post 'project/release_repository/:project/:repository' => :release_repository, constraints: cons
+    get 'project/release_repository_dialog/:project/:repository' => :release_repository_dialog, constraints: cons
     get 'project/move_path_up' => :move_path_up
     get 'project/move_path_down' => :move_path_down
     post 'project/save_person/:project' => :save_person, constraints: cons
@@ -189,6 +193,8 @@ OBSWebUI::Application.routes.draw do
     get 'project/list_incidents/:project' => :list_incidents, constraints: cons
     get 'project/unlock_dialog' => :unlock_dialog
     post 'project/unlock' => :unlock
+    get  'project/comments/:project' => :comments, constraints: cons
+    post 'project/comments/:project' => :save_comments, constraints: cons
   end
 
   controller :request do
@@ -211,6 +217,8 @@ OBSWebUI::Application.routes.draw do
     get 'request/change_devel_request' => :change_devel_request
     get 'request/set_incident_dialog' => :set_incident_dialog
     post 'request/set_incident' => :set_incident
+    get 'request/comments/:id' => :comments
+    post 'request/comments/:id' => :save_comments
   end
 
   controller :search do

@@ -4,6 +4,8 @@ class Configuration < ActiveRecord::Base
 
   after_save :write_to_backend
 
+  include CanRenderModel
+
   OPTIONS_YML =  { :title => nil,
                    :description => nil,
                    :name => nil,                     # from BSConfig.pm
@@ -83,39 +85,12 @@ class Configuration < ActiveRecord::Base
     self.save!
   end
 
-
   def write_to_backend()
     if CONFIG['global_write_through']
       path = "/configuration"
       logger.debug "Write configuration information to backend..."
-      Suse::Backend.put_source(path, self.render_axml)
+      Suse::Backend.put_source(path, self.render_xml)
     end
   end
 
-  def render_axml()
-    builder = Nokogiri::XML::Builder.new
-
-    builder.configuration() do |configuration|
-      keys = ::Configuration::OPTIONS_YML.keys
-      keys.each do |key|
-        next if self.send(key.to_s).nil?
-
-        value = self.send(key.to_s)
-        if ON_OFF_OPTIONS.include? key
-          value = value ? "on" : "off"
-        end
-        configuration.send(key.to_s, value)
-      end
-
-      configuration.schedulers do |schedulers|
-        Architecture.where(:available => 1).each do |arch|
-          schedulers.arch( arch.name )
-        end
-      end
-    end
-
-    return builder.doc.to_xml :indent => 2, :encoding => 'UTF-8',
-                              :save_with => Nokogiri::XML::Node::SaveOptions::NO_DECLARATION |
-                                            Nokogiri::XML::Node::SaveOptions::FORMAT
-  end
 end

@@ -4,6 +4,8 @@ require 'builder/xchar'
 
 class Package < ActiveRecord::Base
   include FlagHelper
+  include CanRenderModel
+  include HasRelationships
 
   class CycleError < APIException
    setup "cycle_error"
@@ -28,18 +30,17 @@ class Package < ActiveRecord::Base
     setup 'source_access_no_permission', 403, "Source Access not allowed"
   end
   belongs_to :project, foreign_key: :db_project_id, inverse_of: :packages
+  delegate :name, to: :project, prefix: true
 
-  has_many :package_user_role_relationships, :dependent => :destroy, foreign_key: :db_package_id
-  has_many :package_group_role_relationships, :dependent => :destroy, foreign_key: :db_package_id
-  has_many :messages, :as => :db_object, :dependent => :destroy
+  has_many :messages, :as => :db_object, dependent: :delete_all
 
-  has_many :taggings, :as => :taggable, :dependent => :destroy
+  has_many :taggings, :as => :taggable, dependent: :delete_all
   has_many :tags, :through => :taggings
 
   has_many :download_stats
-  has_many :ratings, :as => :db_object, :dependent => :destroy
+  has_many :ratings, :as => :db_object, dependent: :delete_all
 
-  has_many :flags, -> { order(:position) }, :dependent => :destroy, foreign_key: :db_package_id
+  has_many :flags, -> { order(:position) }, dependent: :delete_all, foreign_key: :db_package_id
 
   belongs_to :develpackage, :class_name => "Package", :foreign_key => 'develpackage_id'
   has_many  :develpackages, :class_name => "Package", :foreign_key => 'develpackage_id'
@@ -49,11 +50,13 @@ class Package < ActiveRecord::Base
   has_many :package_kinds, :dependent => :destroy, foreign_key: :db_package_id
   has_many :package_issues, :dependent => :destroy, foreign_key: :db_package_id # defined in sources
 
+  has_many :comments
+  
   after_save :write_to_backend
   before_update :update_activity
   after_rollback :reset_cache
 
-  default_scope { where("packages.db_project_id not in (?)", ProjectUserRoleRelationship.forbidden_project_ids ) }
+  default_scope { where("packages.db_project_id not in (?)", Relationship.forbidden_project_ids ) }
 
   validates :name, presence: true, length: { maximum: 200 }
   validate :valid_name
@@ -329,9 +332,23 @@ class Package < ActiveRecord::Base
     private_set_package_kind( nil, commit )
   end
 
+  def self.source_path(project, package, file = nil)
+    path = "/source/#{URI.escape(project)}/#{URI.escape(package)}"
+    path += "/#{URI.escape(file)}" unless file.blank?
+    path
+  end
+
+  def source_path(file = nil)
+    Package.source_path(self.project.name, self.name, file)
+  end
+
+  def source_file(file)
+    Suse::Backend.get(source_path(file)).body
+  end
+
   def dir_hash
     begin
-      directory = Suse::Backend.get("/source/#{URI.escape(self.project.name)}/#{URI.escape(self.name)}").body
+      directory = Suse::Backend.get(self.source_path).body
       Xmlhash.parse(directory)
     rescue ActiveXML::Transport::Error => e
       Xmlhash::XMLHash.new error: e.summary 
@@ -373,12 +390,11 @@ class Package < ActiveRecord::Base
 
     # update issue database based on file content
     if self.package_kinds.find_by_kind 'patchinfo'
-      patchinfo = Suse::Backend.get("/source/#{URI.escape(self.project.name)}/#{URI.escape(self.name)}/_patchinfo")
+      xml = Patchinfo.new.read_patchinfo_xmlhash(self)
       Project.transaction do
         self.package_issues.destroy_all
-        xml = REXML::Document.new(patchinfo.body.to_s)
-        xml.root.elements.each('issue') { |i|
-          issue = Issue.find_or_create_by_name_and_tracker( i.attributes['id'], i.attributes['tracker'] )
+        xml.elements('issue') { |i|
+          issue = Issue.find_or_create_by_name_and_tracker( i['id'], i['tracker'] )
           self.package_issues.create( :issue => issue, :change => "kept" )
         }
       end
@@ -465,9 +481,9 @@ class Package < ActiveRecord::Base
 
   def update_from_xml( xmlhash )
     check_write_access!
+
     self.title = xmlhash.value('title')
     self.description = xmlhash.value('description')
-    self.bcntsynctag = nil
     self.bcntsynctag = xmlhash.value('bcntsynctag')
 
     #--- devel project ---#
@@ -487,109 +503,11 @@ class Package < ActiveRecord::Base
     
     # just for cycle detection
     self.resolve_devel_package
-    
-    #--- update users ---#
-    usercache = Hash.new
-    self.package_user_role_relationships.each do |purr|
-      h = usercache[purr.user.login] ||= Hash.new
-      h[purr.role.title] = purr
-    end
 
     # give ourselves an ID
     self.save!
 
-    xmlhash.elements('person') do |person|
-      if not Role.rolecache.has_key? person['role']
-        raise SaveError, "illegal role name '#{person['role']}'"
-      end
-      user = User.get_by_login(person['userid'])
-      if usercache.has_key? person['userid']
-        #user has already a role in this package
-        pcache = usercache[person['userid']]
-        if pcache.has_key? person['role']
-          #role already defined, only remove from cache
-          pcache[person['role']] = :keep
-        else
-          #new role
-          self.package_user_role_relationships.new(user: user, role: Role.rolecache[person['role']])
-          pcache[person['role']] = :new
-        end
-      else
-        self.package_user_role_relationships.new(user: user, role: Role.rolecache[person['role']])
-        usercache[person['userid']] = { person['role'] => :new }
-      end
-    end
-    
-    #delete all roles that weren't found in uploaded xml
-    usercache.each do |user, roles|
-      roles.each do |role, object|
-        next if [:keep, :new].include?(object)
-        object.delete
-      end
-    end
-    
-    #--- end update users ---#
-    
-    #--- update group ---#
-    groupcache = Hash.new
-    self.package_group_role_relationships.each do |pgrr|
-      h = groupcache[pgrr.group.title] ||= Hash.new
-      h[pgrr.role.title] = pgrr
-    end
-    
-    xmlhash.elements('group') do |ge|
-      group = Group.find_by_title(ge['groupid'])
-      if groupcache.has_key? ge['groupid']
-        #group has already a role in this package
-        pcache = groupcache[ge['groupid']]
-
-        if pcache.has_key? ge['role']
-          #role already defined, only remove from cache
-          pcache[ge['role']] = :keep
-        else
-          #new role
-          if not Role.rolecache.has_key? ge['role']
-            raise SaveError, "illegal role name '#{ge['role']}'"
-          end
-          self.package_group_role_relationships.new(group: group, role: Role.rolecache[ge['role']])
-          pcache[ge['role']] = :new
-        end
-      else
-        unless group
-          # check with LDAP
-          if defined?( CONFIG['ldap_mode'] ) && CONFIG['ldap_mode'] == :on
-            if defined?( CONFIG['ldap_group_support'] ) && CONFIG['ldap_group_support'] == :on
-              if User.find_group_with_ldap(ge['groupid'])
-                logger.debug "Find and Create group '#{ge['groupid']}' from LDAP"
-                newgroup = Group.create( :title => ge['groupid'] )
-                unless newgroup.errors.empty?
-                  raise SaveError, "unknown group '#{ge['groupid']}', failed to create the ldap groupid on OBS"
-                end
-                group=Group.find_by_title(ge['groupid'])
-              else
-                raise SaveError, "unknown group '#{ge['groupid']}' on LDAP server"
-              end
-            end
-          end
-
-          unless group
-            raise SaveError, "unknown group '#{ge['groupid']}'"
-          end
-        end
-
-        self.package_group_role_relationships.new(group: group, role: Role.rolecache[ge['role']])
-        groupcache[ge['groupid']] = { ge['role'] => :new }
-      end
-    end
-
-    #delete all roles that weren't found in uploaded xml
-    groupcache.each do |group, roles|
-      roles.each do |role, object|
-        next if [:keep, :new].include? object
-        object.destroy
-      end
-    end
-    #--- end update groups ---#
+    update_relationships_from_xml( xmlhash )
 
     #---begin enable / disable flags ---#
     update_all_flags(xmlhash)
@@ -622,7 +540,7 @@ class Package < ActiveRecord::Base
     end
 
     # verify with allowed values for this attribute definition
-    if atype.allowed_values.length > 0
+    unless atype.allowed_values.empty?
       logger.debug( "Verify value with allowed" )
       attrib.each_value.each do |value|
         found = 0
@@ -668,7 +586,7 @@ class Package < ActiveRecord::Base
   end
 
   def reset_cache
-    Rails.cache.delete('meta_package_%d' % id)
+    Rails.cache.delete('xml_package_%d' % id)
   end
 
   def write_to_backend
@@ -695,116 +613,22 @@ class Package < ActiveRecord::Base
     return a
   end
 
-  def add_user( user, role )
-    check_write_access!
-    unless role.kind_of? Role
-      role = Role.get_by_title(role)
-    end
-
-    if role.global
-      #only nonglobal roles may be set in a project
-      raise SaveError, "tried to set global role '#{role.title}' for user '#{user}' in package '#{self.name}'"
-    end
-
-    unless user.kind_of? User
-      user = User.get_by_login(user.to_s)
-    end
-
-    PackageUserRoleRelationship.create(
-                                       :package => self,
-                                       :user => user,
-                                       :role => role )
+  def to_axml_id
+    return "<package project='#{::Builder::XChar.encode(project.name)}' name='#{::Builder::XChar.encode(name)}'/>"
   end
 
-  def add_group( group, role )
-    check_write_access!
-    unless role.kind_of? Role
-      role = Role.get_by_title(role)
-    end
-
-    if role.global
-      #only nonglobal roles may be set in a project
-      raise SaveError, "tried to set global role '#{role_title}' for group '#{group}' in package '#{self.name}'"
-    end
-
-    unless group.kind_of? Group
-      group = Group.find_by_title(group.to_s)
-    end
-
-    PackageGroupRoleRelationship.create(
-                                        :package => self,
-                                        :group => group,
-                                        :role => role )
-  end
-
-  def each_user( opt={}, &block )
-    users = package_user_role_relationships.joins(:role, :user).select("users.login as login, roles.title AS role_name").order("role_name, login")
-    if( block )
-      users.each do |u|
-        block.call u.login, u.role_name
-      end
-    end
-    return users
-  end
-
-  def each_group( opt={}, &block )
-    groups = package_group_role_relationships.joins(:role, :group).select("groups.title as title, roles.title as role_name").order("role_name, title")
-    if( block )
-      groups.each do |g|
-        block.call g.title, g.role_name
-      end
-    end
-    return groups
+  def render_xml(view = nil)
+    super(view: view) # CanRenderModel
   end
 
   def to_axml(view = nil)
     if view
-      render_axml(view)
+      render_xml(view)
     else
-      Rails.cache.fetch('meta_package_%d' % self.id) do
-        render_axml
+      Rails.cache.fetch('xml_package_%d' % self.id) do
+        render_xml(view)
       end
     end
-  end
-
-  def render_issues_axml(params={})
-    builder = Nokogiri::XML::Builder.new
-
-    filter_changes = states = nil
-    filter_changes = params[:changes].split(",") if params[:changes]
-    states = params[:states].split(",") if params[:states]
-    login = params[:login]
-
-    builder.package( :project => self.project.name, :name => self.name ) do |package|
-      self.package_kinds.each do |k|
-        package.kind(k.kind)
-      end
-      # issues defined in sources
-      issues = self.package_issues
-      # add issues defined in attributes
-      attribs.each do |attr|
-        next unless attr.attrib_type.issue_list
-        issues += attr.issues
-      end
-      # filter and render them
-      issues.each do |i|
-        change = nil
-        change = i.change if i.class == PackageIssue
-        next if filter_changes and (not change or not filter_changes.include? change)
-        next if states and (not i.issue.state or not states.include? i.issue.state)
-        o = nil
-        if i.issue.owner_id
-          # self.owner must not by used, since it is reserved by rails
-          o = User.find i.issue.owner_id
-        end
-        next if login and (not o or not login == o.login)
-        i.issue.render_body(package, change)
-      end
-    end
-
-    return builder.doc.to_xml :indent => 2, :encoding => 'UTF-8',
-                              :save_with => Nokogiri::XML::Node::SaveOptions::NO_DECLARATION |
-                                            Nokogiri::XML::Node::SaveOptions::FORMAT
   end
 
   def render_attribute_axml(params={})
@@ -824,12 +648,12 @@ class Package < ActiveRecord::Base
         p[:namespace] = attr.attrib_type.attrib_namespace.name
         p[:binary] = attr.binary if attr.binary
         a.attribute(p) do |y|
-          if attr.issues.length>0
+          unless attr.issues.empty?
             attr.issues.each do |ai|
               y.issue(:name => ai.issue.name, :tracker => ai.issue.issue_tracker.name)
             end
           end
-          if attr.values.length > 0
+          unless attr.values.empty?
             attr.values.each do |val|
               y.value(val.value)
             end
@@ -855,7 +679,7 @@ class Package < ActiveRecord::Base
           p[:namespace] = attr.attrib_type.attrib_namespace.name
           p[:binary] = attr.binary if attr.binary
           a.attribute(p) do |y|
-            if attr.values.length > 0
+            unless attr.values.empty?
               attr.values.each do |val|
                 y.value(val.value)
               end
@@ -874,53 +698,6 @@ class Package < ActiveRecord::Base
                                :save_with => Nokogiri::XML::Node::SaveOptions::NO_DECLARATION |
                                              Nokogiri::XML::Node::SaveOptions::FORMAT
 
-  end
-
-  def render_axml(view = nil)
-    builder = Nokogiri::XML::Builder.new
-    logger.debug "----------------- rendering package #{name} ------------------------"
-    builder.package( :name => name, :project => project.name ) do |package|
-      package.title( title )
-      package.description( description )
-      
-      if develpackage
-        package.devel( :project => develpackage.project.name, :package => develpackage.name )
-      end
-
-      each_user do |user,role|
-        package.person( :userid => user, :role => role )
-      end
-
-      each_group do |group,role|
-        package.group( :groupid => group, :role => role )
-      end
-
-      if view == 'flagdetails'
-        flags_to_xml(builder, expand_flags, 1)
-      else
-        FlagHelper.flag_types.each do |flag_name|
-          flaglist = type_flags(flag_name)
-          package.send(flag_name) do
-            flaglist.each do |flag|
-              flag.to_xml(builder)
-            end
-          end unless flaglist.empty?
-        end 
-      end
-
-      package.url( url ) unless url.blank?
-      package.bcntsynctag( bcntsynctag ) unless bcntsynctag.blank?
-
-    end
-    logger.debug "----------------- end rendering package #{name} ------------------------"
-
-    return builder.doc.to_xml :indent => 2, :encoding => 'UTF-8', 
-                               :save_with => Nokogiri::XML::Node::SaveOptions::NO_DECLARATION |
-                                             Nokogiri::XML::Node::SaveOptions::FORMAT
-  end
-
-  def to_axml_id
-    return "<package project='#{::Builder::XChar.encode(project.name)}' name='#{::Builder::XChar.encode(name)}'/>"
   end
 
   def rating( user_id=nil )
@@ -981,42 +758,6 @@ class Package < ActiveRecord::Base
     return project.expand_flags(self)
   end
 
-  def remove_all_persons
-    check_write_access!
-    self.package_user_role_relationships.delete_all
-  end
-
-  def remove_all_groups
-    check_write_access!
-    self.package_group_role_relationships.delete_all
-  end
-
-  def remove_role(what, role)
-    check_write_access!
-    if what.kind_of? Group
-      rel = self.package_group_role_relationships.where(bs_group_id: what.id)
-    else
-      rel = self.package_user_role_relationships.where(bs_user_id: what.id)
-    end
-    rel = rel.where(role_id: role.id) if role
-    self.transaction do
-      rel.delete_all
-      write_to_backend
-    end
-  end
-
-  def add_role(what, role)
-    check_write_access!
-    self.transaction do
-      if what.kind_of? Group
-        self.package_group_role_relationships.create!(role: role, group: what)
-      else
-        self.package_user_role_relationships.create!(role: role, user: what)
-      end
-      write_to_backend
-    end
-  end
-
   def open_requests_with_package_as_source_or_target
     rel = BsRequest.where(state: [:new, :review, :declined]).joins(:bs_request_actions)
     rel = rel.where("(bs_request_actions.source_project = ? and bs_request_actions.source_package = ?) or (bs_request_actions.target_project = ? and bs_request_actions.target_package = ?)", self.project.name, self.name, self.project.name, self.name)
@@ -1027,11 +768,6 @@ class Package < ActiveRecord::Base
     rel = BsRequest.where(state: [:new, :review])
     rel = rel.joins(:reviews).where("reviews.state = 'new' and reviews.by_project = ? and reviews.by_package = ? ", self.project.name, self.name)
     return BsRequest.where(id: rel.select("bs_requests.id").map { |r| r.id})
-  end
-
-  def user_has_role?(user, role)
-    return true if self.package_user_role_relationships.where(role_id: role.id, bs_user_id: user.id).first
-    return !self.package_group_role_relationships.where(role_id: role).joins(:groups_users).where(groups_users: { user_id: user.id }).first.nil?
   end
 
   def linkinfo
@@ -1246,5 +982,23 @@ class Package < ActiveRecord::Base
      self.linked_package ||= LinkedPackage.new(links_to: link)
      self.linked_package.save # update updated_at
 
+  end
+
+  # FIXME: we REALLY should use active_model_serializers
+  def as_json(options = nil)
+    if options
+      if options.key?(:methods)
+        if options[:methods].kind_of? Array
+          options[:methods] << :project_name unless options[:methods].include?(:project_name)
+        elsif options[:methods] != :project_name
+          options[:methods] = [options[:methods]] + [:project_name]
+        end
+      else
+        options[:methods] = [:project_name]
+      end
+      super(options)
+    else
+      super(methods: [:project_name])
+    end
   end
 end

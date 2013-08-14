@@ -513,20 +513,22 @@ class BsRequestAction < ActiveRecord::Base
     # obj can be a project or package object
     reviewers = []
     
+    reviewer_id = Role.rolecache["reviewer"].id
+
     # check for reviewers in a package first
     if obj.class == Project
-      obj.project_user_role_relationships.where(role_id: Role.get_by_title("reviewer").id ).each do |r|
-        reviewers << User.find(r.bs_user_id)
+      obj.relationships.users.where(role_id: reviewer_id ).pluck(:user_id).each do |r|
+        reviewers << User.find(r)
       end
-      obj.project_group_role_relationships.where(role_id: Role.get_by_title("reviewer").id ).each do |r|
-        reviewers << Group.find(r.bs_group_id)
+      obj.relationships.groups.where(role_id: reviewer_id ).pluck(:group_id).each do |r|
+        reviewers << Group.find(r)
       end
     elsif obj.class == Package
-      obj.package_user_role_relationships.joins(:role).where("roles.title = 'reviewer'").select("bs_user_id").each do |r|
-        reviewers << User.find(r.bs_user_id)
+      obj.relationships.users.where(role_id: reviewer_id).pluck(:user_id).each do |r|
+        reviewers << User.find(r)
       end
-      obj.package_group_role_relationships.where(role_id: Role.get_by_title("reviewer").id ).each do |r|
-        reviewers << Group.find(r.bs_group_id)
+      obj.relationships.groups.where(role_id: reviewer_id ).pluck(:group_id).each do |r|
+        reviewers << Group.find(r)
       end
       reviewers += find_reviewers(obj.project)
     end
@@ -671,10 +673,12 @@ class BsRequestAction < ActiveRecord::Base
       end
       
     elsif [ :delete, :add_role, :set_bugowner ].include? self.action_type
-      # target must exist
+      if self.target_package
+          target_package = target_project.packages.find_by_name(self.target_package) if target_project
+      end
       if opts[:newstate] == "accepted"
+      # target must exist
         if self.target_package
-          target_package = target_project.packages.find_by_name(self.target_package)
           unless target_package
             raise NotExistantTarget.new "Unable to process package #{self.target_project}/#{self.target_package}; it does not exist."
           end
@@ -723,7 +727,8 @@ class BsRequestAction < ActiveRecord::Base
     
     # abort immediatly if we want to write and can't
     if opts[:cmd] == "changestate" and [ "accepted" ].include? opts[:newstate] and not write_permission_in_this_action
-      msg = "No permission to modify target of request #{self.bs_request.id} (type #{self.action_type}): project #{self.target_project}"
+      msg = ""
+      msg = "No permission to modify target of request #{self.bs_request.id} (type #{self.action_type}): project #{self.target_project}" unless self.bs_request.new_record?
       msg += ", package #{self.target_package}" if self.target_package
       raise RequestNoPermission.new msg
     end

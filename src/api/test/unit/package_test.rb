@@ -122,7 +122,7 @@ class PackageTest < ActiveSupport::TestCase
   end
 
   def test_render
-     xml = packages(:kdelibs).render_axml
+     xml = packages(:kdelibs).render_xml
      assert_equal Xmlhash.parse(xml), {"name"=>"kdelibs", 
 	     "project"=>"kde4", "title"=>"blub", "description"=>"blub", 
 	     "devel"=>{"project"=>"home:coolo:test", "package"=>"kdelibs_DEVEL_package"}, 
@@ -162,7 +162,7 @@ class PackageTest < ActiveSupport::TestCase
         </package>"))
     end
 
-    assert_raise Package::SaveError do
+    assert_raise HasRelationships::SaveError do
       @package.update_from_xml(Xmlhash.parse(
          "<package name='TestBack' project='home:Iggy'>
                               <title>My Test package</title>
@@ -186,7 +186,7 @@ class PackageTest < ActiveSupport::TestCase
     @package.add_user('tom', 'maintainer')
     @package.update_from_xml(Xmlhash.parse(orig))
 
-    assert_raise Package::SaveError do
+    assert_raise Relationship::SaveError do
       @package.add_user('tom', 'Admin')
     end
     assert_equal orig, @package.to_axml

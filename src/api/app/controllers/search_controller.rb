@@ -1,9 +1,8 @@
-
 include SearchHelper
 
 class SearchController < ApplicationController
 
-  require 'xpath_engine'
+  require_dependency 'xpath_engine'
 
   def project
     search(:project, true)
@@ -86,6 +85,61 @@ class SearchController < ApplicationController
     return pred
   end
 
+  def filter_items(items, offset, limit)
+    begin
+      @offset = Integer(params[:offset])
+    rescue
+      @offset = 0
+    end
+    begin
+      @limit = Integer(params[:limit])
+    rescue
+      @limit = items.size
+    end
+    nitems = Array.new
+    items.each do |item|
+
+      if @offset > 0
+        @offset -= 1
+      else
+        nitems << item
+        if @limit
+          @limit -= 1
+          break if @limit == 0
+        end
+      end
+    end
+    nitems
+  end
+
+  # unfortunately read_multi hangs with just too many items
+  # so maximize the keys to query
+  def read_multi_workaround(keys)
+    ret = Hash.new
+    while !keys.empty?
+      slice = keys.slice!(0, 300)
+      ret.merge!(Rails.cache.read_multi(*slice))
+    end
+    ret
+  end
+
+  def filter_items_from_cache(items, xml, key_template)
+    # ignore everything that is already in the memcache
+    id2cache_key = Hash.new
+    items.each { |i| id2cache_key[i] = key_template % i }
+    cached = read_multi_workaround(id2cache_key.values)
+    search_items = Array.new
+    items.each do |i|
+      key = id2cache_key[i]
+      if cached.has_key? key
+        xml[i] = cached[key]
+      else
+        search_items << i
+      end
+    end
+    search_items
+  end
+
   def search(what, render_all)
     if render_all and params[:match].blank?
       render_error :status => 400, :errorcode => "empty_match",
@@ -99,31 +153,67 @@ class SearchController < ApplicationController
 
     xe = XpathEngine.new
 
-    output = ActiveXML::Node.new '<collection/>'
-    matches = 0
+    items = xe.find("/#{what}[#{predicate}]")
 
-    xe.find("/#{what}[#{predicate}]", params.slice(:sort_by, :order, :limit, :offset).merge({"render_all" => render_all})) do |item|
-      matches = matches + 1
-      if item.kind_of? Package or item.kind_of? Project
-        # already checked in this case
-      elsif item.kind_of? Repository
-        # This returns nil if access is not allowed
-        next if ProjectUserRoleRelationship.forbidden_project_ids.include? item.db_project_id
-      elsif item.kind_of? User
-        # Person data is public
-      elsif item.kind_of? Issue
-        # all our hosted issues are public atm
-      elsif item.kind_of? BsRequest
-        # requests leak (FIXME)
-      else
-        render_error :status => 400, :message => "unknown object received from collection %s (#{item.inspect})" % predicate
-        return
-      end
-        
-      output.add_node(render_all ? item.to_axml : item.to_axml_id)
+    matches = items.size
+
+    if params[:offset] || params[:limit]
+      # Add some pagination. Limiting the ids we have
+      items = filter_items(items, params[:offset], params[:limit])
     end
 
+    includes = nil
+
+    output = ActiveXML::Node.new '<collection/>'
     output.set_attribute("matches", matches.to_s)
+
+    xml = Hash.new # filled by filter
+    if render_all
+      key_template = "xml_#{what}_%d"
+    else
+      key_template = "xml_id_#{what}_%d"
+    end
+    search_items = filter_items_from_cache(items, xml, key_template)
+
+    case what
+    when :package
+      relation = Package.where(id: search_items)
+      includes = [:project]
+    when :project
+      relation = Project.where(id: search_items)
+      if render_all
+        includes = [:repositories]
+      else
+        includes = []
+        relation = relation.select("projects.id,projects.name")
+      end
+    when :repository
+      relation = Repository.where(id: search_items)
+      includes = [:project]
+    when :request
+      relation = BsRequest.where(id: search_items)
+      includes = [:bs_request_actions, :bs_request_histories, :reviews]
+    when :person
+      relation = User.where(id: search_items)
+      includes = []
+    when :issue
+      relation = Issue.where(id: search_items)
+      includes = [:issue_tracker]
+    else
+      logger.fatal "strange model: #{what}"
+    end
+    relation = relation.includes(includes).references(includes)
+
+    # TODO support sort_by and order parameters?
+
+    relation.each do |item|
+      xml[item.id] = render_all ? item.to_axml : item.to_axml_id
+    end if items.size > 0
+
+    items.each do |i|
+      output.add_node(xml[i])
+    end
+
     render :text => output.dump_xml, :content_type => "text/xml"
   end
 
@@ -149,51 +239,52 @@ class SearchController < ApplicationController
       render_error :status => 404, :message => "no such attribute"
       return
     end
-    project = Project.get_by_name(params[:project]) if params[:project]
+
+    # gather the relation for attributes depending on project/package combination
     if params[:package]
       if params[:project]
-         packages = Package.get_by_project_and_name(params[:project], params[:package])
+        attribs = Package.get_by_project_and_name(params[:project], params[:package]).attribs
       else
-         packages = Package.where(name: params[:package]).all
+        attribs = attrib.attribs.where(db_package_id: Package.where(name: params[:package]))
       end
-    elsif project
-      packages = project.packages
+    else
+      if params[:project]
+        attribs = attrib.attribs.where(db_package_id: Project.get_by_name(params[:project]).packages)
+      else
+        attribs = attrib.attribs
+      end
     end
 
-    if packages
-      attribs = Attrib.where("attrib_type_id = ? AND db_package_id in (?)", attrib.id, packages.collect { |p| p.id })
-    else
-      attribs = attrib.attribs
-    end
-    values = AttribValue.where("attrib_id IN (?)", attribs.collect { |a| a.id } )
+    # get the values associated with the attributes and store them
+    attribs = attribs.pluck(:id, :db_package_id)
+    values = AttribValue.where("attrib_id IN (?)", attribs.collect { |a| a[0] })
     attribValues = Hash.new
     values.each do |v|
       attribValues[v.attrib_id] ||= Array.new
       attribValues[v.attrib_id] << v
     end
-    packages = Package.where("packages.id IN (?)", attribs.collect { |a| a.db_package_id }).includes(:project)
+    # retrieve the package name and project for the attributes
+    packages = Package.where("packages.id IN (?)", attribs.collect { |a| a[1] }).pluck(:id, :name, :db_project_id)
     pack2attrib = Hash.new
-    attribs.each do |a|
-      if a.db_package_id
-        pack2attrib[a.db_package_id] = a.id
-      end
+    attribs.each do |attrib_id, pkg|
+      pack2attrib[pkg] = attrib_id
     end
-    packages.sort! { |x,y| x.name <=> y.name }
-    projects = packages.collect { |p| p.project }.uniq
-    builder = Builder::XmlMarkup.new( :indent => 2 )
+    packages.sort! { |x, y| x[0] <=> y[0] }
+    projects = Project.where(id: packages.collect { |p| p[2] }.uniq).pluck(:id, :name)
+    builder = Builder::XmlMarkup.new(:indent => 2)
     xml = builder.attribute(:namespace => namespace, :name => name) do
-      projects.each do |proj|
-        builder.project(:name => proj.name) do
-          packages.each do |p|
-             next if p.db_project_id != proj.id
-             builder.package(:name => p.name) do
-               values = attribValues[pack2attrib[p.id]]
-               unless values.nil?
-                 builder.values do
-                   values.each { |v| builder.value(v.value) }
-                 end
-               end
-             end
+      projects.each do |prj_id, prj_name|
+        builder.project(:name => prj_name) do
+          packages.each do |pkg_id, pkg_name, pkg_prj|
+            next if pkg_prj != prj_id
+            builder.package(:name => pkg_name) do
+              values = attribValues[pack2attrib[pkg_id]]
+              unless values.nil?
+                builder.values do
+                  values.each { |v| builder.value(v.value) }
+                end
+              end
+            end
           end
         end
       end

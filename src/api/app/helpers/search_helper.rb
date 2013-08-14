@@ -1,6 +1,8 @@
 
 module SearchHelper
 
+  include Maintainership
+
   def search_owner(params, obj)
     params[:attribute] ||= "OBS:OwnerRootProject"
     at = AttribType.find_by_name(params[:attribute])
@@ -19,7 +21,7 @@ module SearchHelper
     else
       # Find all marked projects
       projects = Project.find_by_attribute_type(at)
-      unless projects.length > 0
+      if projects.empty?
         render_error :status => 400, :errorcode => "attribute_not_set",
   		   :message => "The attribute type #{params[:attribute]} is not set on any projects. No default projects defined."
         return
@@ -36,24 +38,25 @@ module SearchHelper
       if params[:filter]
         filter=params[:filter].split(",")
       else
-        if attrib and v=attrib.values.where(value: "BugownerOnly").first
-  	filter=["bugowner"]
+        if attrib and v=attrib.values.where(value: "BugownerOnly").exists?
+          filter=["bugowner"]
         end
       end
       if params[:devel]
         devel=false if [ "0", "false" ].include? params[:devel]
       else
-        if attrib and v=attrib.values.where(value: "DisableDevel").first
-  	devel=false
+        if attrib and v=attrib.values.where(value: "DisableDevel").exists?
+          devel=false
         end
       end
   
       if obj.nil?
-        owners += project.find_containers_without_definition(devel, filter)
+        owners += find_containers_without_definition(project, devel, filter)
       elsif obj.class == String
-        owners += project.find_assignees(obj, limit.to_i, devel, filter, (true unless params[:webui_mode].blank?))
+        owners += find_assignees(project, obj, limit.to_i, devel,
+                                                filter, (true unless params[:webui_mode].blank?))
       else
-        owners += project.find_containers(obj, devel, filter)
+        owners += find_containers(project, obj, devel, filter)
       end
   
     end

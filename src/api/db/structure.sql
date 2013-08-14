@@ -198,10 +198,29 @@ CREATE TABLE `bs_requests` (
   `superseded_by` int(11) DEFAULT NULL,
   `created_at` datetime NOT NULL,
   `updated_at` datetime NOT NULL,
+  `accept_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `index_bs_requests_on_creator` (`creator`),
   KEY `index_bs_requests_on_state` (`state`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;
+
+CREATE TABLE `comments` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `project_id` int(11) DEFAULT NULL,
+  `package_id` int(11) DEFAULT NULL,
+  `bs_request_id` int(11) DEFAULT NULL,
+  `title` varchar(255) COLLATE utf8_unicode_ci DEFAULT NULL,
+  `body` text COLLATE utf8_unicode_ci,
+  `parent_id` int(11) DEFAULT NULL,
+  `type` varchar(255) COLLATE utf8_unicode_ci DEFAULT NULL,
+  `user` varchar(255) COLLATE utf8_unicode_ci DEFAULT NULL,
+  `created_at` datetime DEFAULT NULL,
+  `updated_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `index_comments_on_project_id` (`project_id`),
+  KEY `index_comments_on_package_id` (`package_id`),
+  KEY `index_comments_on_bs_request_id` (`bs_request_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
 
 CREATE TABLE `configurations` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -400,7 +419,8 @@ CREATE TABLE `linked_packages` (
   `links_to_id` int(11) NOT NULL,
   `package_id` int(11) NOT NULL AUTO_INCREMENT,
   `updated_at` datetime DEFAULT NULL,
-  PRIMARY KEY (`package_id`)
+  PRIMARY KEY (`package_id`),
+  KEY `index_linked_packages_on_links_to_id` (`links_to_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
 
 CREATE TABLE `linked_projects` (
@@ -441,15 +461,6 @@ CREATE TABLE `messages` (
   KEY `user` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;
 
-CREATE TABLE `package_group_role_relationships` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `db_package_id` int(11) NOT NULL,
-  `bs_group_id` int(11) NOT NULL,
-  `role_id` int(11) NOT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `package_group_role_all_index` (`db_package_id`,`bs_group_id`,`role_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
 CREATE TABLE `package_issues` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `db_package_id` int(11) NOT NULL,
@@ -472,20 +483,6 @@ CREATE TABLE `package_kinds` (
   CONSTRAINT `package_kinds_ibfk_1` FOREIGN KEY (`db_package_id`) REFERENCES `packages` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
-CREATE TABLE `package_user_role_relationships` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `db_package_id` int(11) NOT NULL,
-  `bs_user_id` int(11) NOT NULL,
-  `role_id` int(11) NOT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `package_user_role_all_index` (`db_package_id`,`bs_user_id`,`role_id`),
-  KEY `index_package_user_role_relationships_on_bs_user_id` (`bs_user_id`),
-  KEY `role_id` (`role_id`),
-  CONSTRAINT `package_user_role_relationships_ibfk_1` FOREIGN KEY (`db_package_id`) REFERENCES `packages` (`id`),
-  CONSTRAINT `package_user_role_relationships_ibfk_2` FOREIGN KEY (`bs_user_id`) REFERENCES `users` (`id`),
-  CONSTRAINT `package_user_role_relationships_ibfk_3` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
 CREATE TABLE `packages` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `db_project_id` int(11) NOT NULL,
@@ -499,6 +496,7 @@ CREATE TABLE `packages` (
   `activity_index` float DEFAULT '100',
   `bcntsynctag` varchar(255) CHARACTER SET utf8 DEFAULT NULL,
   `develpackage_id` int(11) DEFAULT NULL,
+  `delta` tinyint(1) NOT NULL DEFAULT '1',
   PRIMARY KEY (`id`),
   UNIQUE KEY `packages_all_index` (`db_project_id`,`name`(255)),
   KEY `devel_package_id_index` (`develpackage_id`),
@@ -521,29 +519,6 @@ CREATE TABLE `path_elements` (
   CONSTRAINT `path_elements_ibfk_2` FOREIGN KEY (`repository_id`) REFERENCES `repositories` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
-CREATE TABLE `project_group_role_relationships` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `db_project_id` int(11) NOT NULL,
-  `bs_group_id` int(11) NOT NULL,
-  `role_id` int(11) NOT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `project_group_role_all_index` (`db_project_id`,`bs_group_id`,`role_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-CREATE TABLE `project_user_role_relationships` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `db_project_id` int(11) NOT NULL,
-  `bs_user_id` int(11) NOT NULL,
-  `role_id` int(11) NOT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `project_user_role_all_index` (`db_project_id`,`bs_user_id`,`role_id`),
-  KEY `bs_user_id` (`bs_user_id`),
-  KEY `role_id` (`role_id`),
-  CONSTRAINT `project_user_role_relationships_ibfk_1` FOREIGN KEY (`db_project_id`) REFERENCES `projects` (`id`),
-  CONSTRAINT `project_user_role_relationships_ibfk_2` FOREIGN KEY (`bs_user_id`) REFERENCES `users` (`id`),
-  CONSTRAINT `project_user_role_relationships_ibfk_3` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
 CREATE TABLE `projects` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `name` text COLLATE utf8_bin,
@@ -556,6 +531,7 @@ CREATE TABLE `projects` (
   `type_id` int(11) DEFAULT NULL,
   `maintenance_project_id` int(11) DEFAULT NULL,
   `develproject_id` int(11) DEFAULT NULL,
+  `delta` tinyint(1) NOT NULL DEFAULT '1',
   PRIMARY KEY (`id`),
   UNIQUE KEY `projects_name_index` (`name`(255)),
   KEY `updated_at_index` (`updated_at`),
@@ -575,6 +551,28 @@ CREATE TABLE `ratings` (
   KEY `user` (`user_id`),
   CONSTRAINT `ratings_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;
+
+CREATE TABLE `relationships` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `package_id` int(11) DEFAULT NULL,
+  `project_id` int(11) DEFAULT NULL,
+  `role_id` int(11) NOT NULL,
+  `user_id` int(11) DEFAULT NULL,
+  `group_id` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `index_relationships_on_project_id_and_role_id_and_group_id` (`project_id`,`role_id`,`group_id`),
+  UNIQUE KEY `index_relationships_on_project_id_and_role_id_and_user_id` (`project_id`,`role_id`,`user_id`),
+  UNIQUE KEY `index_relationships_on_package_id_and_role_id_and_group_id` (`package_id`,`role_id`,`group_id`),
+  UNIQUE KEY `index_relationships_on_package_id_and_role_id_and_user_id` (`package_id`,`role_id`,`user_id`),
+  KEY `role_id` (`role_id`),
+  KEY `user_id` (`user_id`),
+  KEY `group_id` (`group_id`),
+  CONSTRAINT `relationships_ibfk_1` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`),
+  CONSTRAINT `relationships_ibfk_2` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
+  CONSTRAINT `relationships_ibfk_3` FOREIGN KEY (`group_id`) REFERENCES `groups` (`id`),
+  CONSTRAINT `relationships_ibfk_4` FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`),
+  CONSTRAINT `relationships_ibfk_5` FOREIGN KEY (`package_id`) REFERENCES `packages` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
 
 CREATE TABLE `release_targets` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -1131,6 +1129,8 @@ INSERT INTO schema_migrations (version) VALUES ('20130621083665');
 
 INSERT INTO schema_migrations (version) VALUES ('20130626160000');
 
+INSERT INTO schema_migrations (version) VALUES ('20130627193722');
+
 INSERT INTO schema_migrations (version) VALUES ('20130702083665');
 
 INSERT INTO schema_migrations (version) VALUES ('20130702203665');
@@ -1140,6 +1140,18 @@ INSERT INTO schema_migrations (version) VALUES ('20130723055536');
 INSERT INTO schema_migrations (version) VALUES ('20130725123636');
 
 INSERT INTO schema_migrations (version) VALUES ('20130726144516');
+
+INSERT INTO schema_migrations (version) VALUES ('20130802183104');
+
+INSERT INTO schema_migrations (version) VALUES ('20130802183717');
+
+INSERT INTO schema_migrations (version) VALUES ('20130802190951');
+
+INSERT INTO schema_migrations (version) VALUES ('20130805073101');
+
+INSERT INTO schema_migrations (version) VALUES ('20130807071147');
+
+INSERT INTO schema_migrations (version) VALUES ('20130814071147');
 
 INSERT INTO schema_migrations (version) VALUES ('21');
 

@@ -5,11 +5,12 @@ class PackageController < ApplicationController
 
   include ApplicationHelper
   include PackageHelper
+  include CommentsHelper
 
   before_filter :require_project, :except => [:rawlog, :rawsourcefile, :submit_request, :devel_project]
   before_filter :require_package, :except => [:rawlog, :rawsourcefile, :submit_request, :save_new_link, :save_new, :devel_project ]
   # make sure it's after the require_, it requires both
-  before_filter :require_login, :only => [:branch]
+  before_filter :require_login, :only => [:branch, :save_comments]
   prepend_before_filter :lockout_spiders, :only => [:revisions, :dependency, :rdiff, :binary, :binaries, :requests]
 
   def show
@@ -53,8 +54,8 @@ class PackageController < ApplicationController
 
     @requests = []
     # TODO!!!
-    #BsRequest.list({:states => 'review', :reviewstates => 'new', :roles => 'reviewer', :project => @project.name, :package => @package.name}) + 
-    #BsRequest.list({:states => 'new', :roles => "target", :project => @project.name, :package => @package.name})
+    #BsRequest.list({:states => %w(review), :reviewstates => %w(new), :roles => %w(reviewer), :project => @project.name, :package => @package.name}) +
+    #BsRequest.list({:states => %w(new), :roles => %w(target), :project => @project.name, :package => @package.name})
   end
 
   def files
@@ -229,7 +230,7 @@ class PackageController < ApplicationController
 
     # Supersede logic has to be below addition as we need the new request id
     if params[:supersede]
-      pending_requests = BsRequest.list(:project => params[:targetproject], :package => params[:package], :states => 'new,review,declined', :types => 'submit')
+      pending_requests = BsRequest.list(:project => params[:targetproject], :package => params[:package], :states => %w(new review declined), :types => %w(submit))
       pending_requests.each do |request|
         next if request.value(:id) == req.value(:id) # ignore newly created request
         begin
@@ -654,21 +655,21 @@ class PackageController < ApplicationController
     redirect_to :action => :show, :project => @project, :package => @package
   end
 
-  def change_role_options(params, action)
-    ret = { project: @project.name, package: params[:package], todo: action }
+  def change_role_options(params)
+    ret = Hash.new
     ret[:role] = params[:role] if params.has_key? :role
     if params.has_key? :userid
-      return ret.merge( { userid: params[:userid] })
+      return ret.merge( { user: params[:userid] })
     else
-      return ret.merge( { groupid: params[:groupid] })
+      return ret.merge( { group: params[:groupid] })
     end
   end
 
   def save_person
     begin
-      ApiDetails.command(:change_role, change_role_options(params, 'add'))
+      ApiDetails.create :project_package_relationships, @project.name, @package.name, change_role_options(params)
       @package.free_cache
-    rescue ApiDetails::CommandFailed => e
+    rescue ApiDetails::TransportError, ApiDetails::NotFoundError => e
       flash[:error] = e.to_s
       redirect_to action: :add_person, project: @project, package: @package, role: params[:role], userid: params[:userid]
       return
@@ -684,9 +685,9 @@ class PackageController < ApplicationController
 
   def save_group
     begin
-      ApiDetails.command(:change_role, change_role_options(params, 'add'))
+      ApiDetails.create :project_package_relationships, @project.name, @package.name, change_role_options(params)
       @package.free_cache
-    rescue ApiDetails::CommandFailed => e
+    rescue ApiDetails::TransportError, ApiDetails::NotFoundError => e
       flash[:error] = e.to_s
       redirect_to action: :add_group, project: @project, package: @package, role: params[:role], groupid: params[:groupid]
       return
@@ -702,9 +703,9 @@ class PackageController < ApplicationController
 
   def remove_role
     begin
-      ApiDetails.command(:change_role, change_role_options(params, 'remove'))
+      ApiDetails.destroy :for_user_project_package_relationships, @project.name, @package.name, change_role_options(params)
       @package.free_cache
-    rescue ActiveXML::Transport::Error => e
+    rescue ApiDetails::TransportError, ApiDetails::NotFoundError => e
       flash[:error] = e.summary
     end
     respond_to do |format|
@@ -845,6 +846,7 @@ class PackageController < ApplicationController
   end
 
   def live_build_log
+    required_parameters :arch, :repository
     @arch = params[:arch]
     @repo = params[:repository]
     begin
@@ -1075,6 +1077,38 @@ class PackageController < ApplicationController
     required_parameters :cmd, :flag
     frontend.source_cmd params[:cmd], project: @project, package: @package, repository: params[:repository], arch: params[:arch], flag: params[:flag], status: params[:status]
     @package = Package.find( params[:package], project: @project.name, view: :flagdetails )
+  end
+
+  def comments
+    begin
+      unless params[:reply] == 'true'
+        @comment = ApiDetails.read(:comments_by_package, @project, @package)
+        @comments_as_thread = sort_comments(@comment)
+      else
+        render_dialog # a dialog box shows up for users to post a reply, as a GET request.
+      end
+    rescue ActiveXML::Transport::Error => e
+      render :text => e.summary, :status => 404, :content_type => "text/plain"
+    end
+  end
+
+  def save_comments
+    begin
+      params[:project] = @project.name
+      params[:package] = @package.name
+      ApiDetails.save_comments(:save_comments_for_packages, params)
+
+      respond_to do |format|
+        format.js { render json: 'ok' }
+        format.html do
+          flash[:notice] = "Comment added successfully"
+          redirect_to action: :comments
+        end
+      end
+    rescue ActiveXML::Transport::Error => e
+      flash[:error] = e.summary
+      redirect_to(:action => "comments", :project => params[:project], :package => params[:package]) and return
+    end
   end
 
   private

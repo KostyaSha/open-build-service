@@ -1,45 +1,104 @@
 class ApiDetails
 
-  class CommandFailed < Exception ; end
+  class TransportError < Exception ; end
+  class NotFoundError < Exception ; end
 
   def self.logger
     Rails.logger
   end
 
-  def self.find(info, opts = {})
-    uri = "/webui/"
-    uri += 
-      case info 
-      when :project_infos then "project_infos?:project"
-      when :project_requests then "project_requests?:project"
-      when :person_requests_that_need_work then "person_requests_that_need_work?:login"
-      when :request_show then "request_show?:id"
-      when :person_involved_requests then "person_involved_requests?:login"
-      when :request_ids then "request_ids?:ids"
-      when :all_projects then "all_projects"
-      when :project_status then "project_status?:project&:limit_to_fails&:limit_to_old&:include_versions&:filter_for_user&:ignore_pending&:filter_devel"
-      else raise "no valid info #{info}"
-      end
-    uri = URI(uri)
+  def self.prepare_search
     transport = ActiveXML::transport
-    uri = transport.substitute_uri(uri, opts)
-    #transport.replace_server_if_needed(uri)
-    data = transport.http_do 'get', uri
-    data = JSON.parse(data)
-    logger.debug "data #{JSON.pretty_generate(data)}"
+    transport.http_do 'post', "/test/prepare_search"
+  end
+
+  def self.read(route_name, *args)
+    http_do :get, route_name, *args
+  end
+
+  def self.create(route_name, *args)
+    http_do :post, route_name, *args
+  end
+
+  def self.destroy(route_name, *args)
+    http_do :delete, route_name, *args
+  end
+
+  def self.save_comments(route_name, params)
+    uri = "/webui/" +
+    case route_name.to_sym
+      when :save_comments_for_projects then "comments/project/#{params[:project]}/new"
+      when :save_comments_for_packages then "comments/package/#{params[:project]}/#{params[:package]}/new"
+      when :save_comments_for_requests then "comments/request/#{params[:request_id]}/new"
+    end
+
+    uri = URI(uri)
+    data = ActiveXML::transport.http_json :post, uri, params
     data
   end
 
-  def self.command(info, opts)
-    raise "no valid info #{info}" unless [:change_role].include? info
-    uri = URI("/webui/#{info.to_s}")
-    begin
-      data = ActiveXML::transport.http_json :post, uri, opts
-    rescue ActiveXML::Transport::Error => e
-      raise CommandFailed, e.summary
+  # Trying to mimic the names and params of Rails' url helpers
+  def self.http_do(verb, route_name, *args)
+    # FIXME: we need a better (real) implementation of nested routes
+    # using rails facilities
+    ids = []
+    opts = {}
+    args.each do |i|
+      if i.kind_of? Fixnum
+        ids << i.to_s
+      elsif i.kind_of? String
+        ids << i
+      elsif i.kind_of? Hash
+        opts = i
+      elsif i.respond_to?(:id)
+        ids << i.id.to_s
+      else
+        ids << i.to_s
+      end
     end
-    #data = JSON.parse(data)
-    logger.debug "command #{data}"
+
+    uri = "/webui/" +
+      case route_name.to_sym
+
+      when :projects then "projects"
+      when :infos_project then "projects/#{ids.first}/infos"
+      when :status_project then "projects/#{ids.first}/status"
+      when :project_relationships then "projects/#{ids.first}/relationships"
+      when :project_package_relationships then "projects/#{ids.first}/packages/#{ids.last}/relationships"
+      when :for_user_project_relationships then "projects/#{ids.first}/relationships/for_user"
+      when :for_user_project_package_relationships then "projects/#{ids.first}/packages/#{ids.last}/relationships/for_user"
+
+      when :requests then "requests"
+      when :request then "requests/#{ids.first}"
+      when :ids_requests then "requests/ids"
+      when :by_class_requests then "requests/by_class"
+
+      when :attrib_types then "attrib_types"
+
+      when :searches then "searches"
+
+      when :comments_by_package then "comments/package/#{ids.first}/#{ids.last}"
+      when :comments_by_project then "comments/project/#{ids.first}"
+      when :comments_by_request then "comments/request/#{ids.first}"
+
+      else raise "no valid route #{route_name}"
+      end
+
+    transport = ActiveXML::transport
+    begin
+      if [:get, :delete].include? verb.to_sym
+        uri = "#{uri}?#{opts.to_query}" unless opts.empty?
+        data = transport.http_do verb, uri
+      else
+        data = transport.http_json verb, URI(uri), opts
+      end
+    rescue ActiveXML::Transport::NotFoundError => e
+      raise NotFoundError, e.summary
+    rescue ActiveXML::Transport::Error => e
+      raise TransportError, e.summary
+    end
+    data = JSON.parse(data)
+    logger.debug "data #{JSON.pretty_generate(data)}"
     data
   end
 
