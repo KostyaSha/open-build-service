@@ -249,7 +249,7 @@ class User < ActiveRecord::Base
       logger.debug( "Unable to connect to LDAP server" )
       return "Unable to connect to LDAP server"
     end
-    user_filter = "(#{LCONFIG['dap_search_attr']}=#{login})"
+    user_filter = "(#{CONFIG['ldap_search_attr']}=#{login})"
     dn = String.new
     ldap_con.search( CONFIG['ldap_search_base'], LDAP::LDAP_SCOPE_SUBTREE, user_filter ) do |entry|
       dn = entry.dn
@@ -321,7 +321,7 @@ class User < ActiveRecord::Base
              LDAP.mod(LDAP::LDAP_MOD_ADD,CONFIG['ldap_mail_attr'],[mail]),       
             ]
     # Added required sn attr
-    if defined?( CONFIG['ldap_sn_attr_required'] ) && CONFIG['ldap_sn_attr_required'] == :on
+    if CONFIG.has_key('ldap_sn_attr_required') && CONFIG['ldap_sn_attr_required'] == :on
       entry << LDAP.mod(LDAP::LDAP_MOD_ADD,'sn',[login])
     end
 
@@ -346,7 +346,7 @@ class User < ActiveRecord::Base
       logger.debug( "Unable to connect to LDAP server" )
       return "Unable to connect to LDAP server"
     end
-    user_filter = "(#{LCONFIG['dap_search_attr']}=#{login})"
+    user_filter = "(#{CONFIG['ldap_search_attr']}=#{login})"
     dn = String.new
     ldap_con.search( CONFIG['ldap_search_base'], LDAP::LDAP_SCOPE_SUBTREE, user_filter ) do |entry|
       dn = entry.dn
@@ -371,7 +371,7 @@ class User < ActiveRecord::Base
 
   # This static method tries to find a group with the given gorup_title to check whether the group is in the LDAP server.
   def self.find_group_with_ldap(group)
-    if defined?( CONFIG['ldap_group_objectclass_attr'] )
+    if CONFIG.has_key?('ldap_group_objectclass_attr')
       filter = "(&(#{CONFIG['ldap_group_title_attr']}=#{group})(objectclass=#{CONFIG['ldap_group_objectclass_attr']}))"
     else
       filter = "(#{CONFIG['ldap_group_title_attr']}=#{group})"
@@ -426,16 +426,16 @@ class User < ActiveRecord::Base
 
     if not user.nil?
       # search user
-      if defined?( CONFIG['ldap_user_filter'] )
-        filter = "(&(#{LCONFIG['dap_search_attr']}=#{user})#{CONFIG['ldap_user_filter']})"
+      if CONFIG.has_key?('ldap_user_filter')
+        filter = "(&(#{CONFIG['ldap_search_attr']}=#{user})#{CONFIG['ldap_user_filter']})"
       else
-        filter = "(#{LCONFIG['dap_search_attr']}=#{user})"
+        filter = "(#{CONFIG['ldap_search_attr']}=#{user})"
       end
       user_dn = String.new
       user_memberof_attr = String.new
       ldap_con.search( CONFIG['ldap_search_base'], LDAP::LDAP_SCOPE_SUBTREE, filter ) do |entry|
         user_dn = entry.dn
-        if defined?( CONFIG['ldap_user_memberof_attr'] ) && entry.attrs.include?( CONFIG['ldap_user_memberof_attr'] )
+        if CONFIG.has_key?('ldap_user_memberof_attr') && entry.attrs.include?( CONFIG['ldap_user_memberof_attr'] )
           user_memberof_attr=entry.vals(CONFIG['ldap_user_memberof_attr'])
         end            
       end
@@ -461,7 +461,7 @@ class User < ActiveRecord::Base
       end
 
       # search group
-      if defined?( CONFIG['ldap_group_objectclass_attr'] )
+      if CONFIG.has_key?('ldap_group_objectclass_attr')
         filter = "(&(#{CONFIG['ldap_group_title_attr']}=#{group})(objectclass=#{CONFIG['ldap_group_objectclass_attr']}))" 
       else
         filter = "(#{CONFIG['ldap_group_title_attr']}=#{group})"
@@ -473,7 +473,7 @@ class User < ActiveRecord::Base
       logger.debug( "Search group: #{filter}" )         
       ldap_con.search( CONFIG['ldap_group_search_base'], LDAP::LDAP_SCOPE_SUBTREE, filter ) do |entry|
         group_dn = entry.dn
-        if defined?( CONFIG['ldap_group_member_attr'] ) && entry.attrs.include?(CONFIG['ldap_group_member_attr'])
+        if CONFIG.has_key?('ldap_group_member_attr') && entry.attrs.include?(CONFIG['ldap_group_member_attr'])
           group_member_attr = entry.vals(CONFIG['ldap_group_member_attr'])
         end
       end
@@ -516,7 +516,7 @@ class User < ActiveRecord::Base
       logger.debug( "Unable to connect to LDAP server" )
       return "Unable to connect to LDAP server"
     end
-    user_filter = "(#{LCONFIG['dap_search_attr']}=#{login})"
+    user_filter = "(#{CONFIG['ldap_search_attr']}=#{login})"
     dn = String.new
     ldap_con.search( CONFIG['ldap_search_base'], LDAP::LDAP_SCOPE_SUBTREE, user_filter ) do |entry|
       dn = entry.dn
@@ -585,7 +585,7 @@ class User < ActiveRecord::Base
         return nil
       end
 
-      if defined?( CONFIG['ldap_user_filter'] )
+      if CONFIG.has_key?('ldap_user_filter')
         user_filter = "(&(#{CONFIG['ldap_search_attr']}=#{login})#{CONFIG['ldap_user_filter']})"
       else
         user_filter = "(#{CONFIG['ldap_search_attr']}=#{login})"
@@ -595,7 +595,7 @@ class User < ActiveRecord::Base
         ldap_con.search( CONFIG['ldap_search_base'], LDAP::LDAP_SCOPE_SUBTREE, user_filter ) do |entry|
           dn = entry.dn
           ldap_info[0] = String.new(entry[CONFIG['ldap_mail_attr']][0])
-          if defined?( CONFIG['ldap_authenticate'] ) && CONFIG['ldap_authenticate'] == :local
+          if CONFIG.has_key?('ldap_authenticate') && CONFIG['ldap_authenticate'] == :local
             if entry[CONFIG['ldap_auth_attr']] then
               ldap_password = entry[CONFIG['ldap_auth_attr']][0]
               logger.debug( "Get auth_attr:#{ldap_password}" )
@@ -1326,7 +1326,7 @@ class User < ActiveRecord::Base
     server = nil
     count = 0
     
-    max_ldap_attempts = defined?( CONFIG['ldap_max_attempts'] ) ? CONFIG['ldap_max_attempts'] : 10
+    max_ldap_attempts = CONFIG.has_key?('ldap_max_attempts') ? CONFIG['ldap_max_attempts'] : 10
     
     while !ping and count < max_ldap_attempts
       count += 1
@@ -1342,20 +1342,20 @@ class User < ActiveRecord::Base
 
     logger.debug( "Connecting to #{server} as '#{user_name}'" )
     begin
-      if defined?( CONFIG['ldap_ssl'] ) && CONFIG['ldap_ssl'] == :on
-        port = defined?( CONFIG['ldap_port'] ) ? CONFIG['ldap_port'] : 636
+      if CONFIG.has_key?('ldap_ssl') && CONFIG['ldap_ssl'] == :on
+        port = CONFIG.has_key?('ldap_port') ? CONFIG['ldap_port'] : 636
         conn = LDAP::SSLConn.new( server, port)
       else
-        port = defined?( CONFIG['ldap_port'] ) ? CONFIG['ldap_port'] : 389
+        port = CONFIG.has_key?('ldap_port') ? CONFIG['ldap_port'] : 389
         # Use LDAP StartTLS. By default start_tls is off.
-        if defined?( CONFIG['ldap_start_tls'] ) && CONFIG['ldap_start_tls'] == :on
+        if CONFIG.has_key?('ldap_start_tls') && CONFIG['ldap_start_tls'] == :on
           conn = LDAP::SSLConn.new( server, port, true)
         else
           conn = LDAP::Conn.new( server, port)
         end
       end
       conn.set_option(LDAP::LDAP_OPT_PROTOCOL_VERSION, 3)
-      if defined?( CONFIG['ldap_referrals'] ) && CONFIG['ldap_referrals'] == :off
+      if CONFIG.has_key?('ldap_referrals') && CONFIG['ldap_referrals'] == :off
         conn.set_option(LDAP::LDAP_OPT_REFERRALS, LDAP::LDAP_OPT_OFF)
       end
       conn.bind(user_name, password)
