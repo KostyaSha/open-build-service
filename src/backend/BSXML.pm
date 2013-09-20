@@ -232,6 +232,10 @@ our $patchinfo = [
 
 our $channel = [
     'channel' =>
+      [ 'product' =>
+            'project',
+            'name',
+      ],
      [[ 'target' =>
 	    'project',
 	    'repository',
@@ -425,6 +429,8 @@ our $sourceinfo = [
 	'error',
 	'originproject',
        [ $linked ],
+	'revtime',
+	'changesmd5',
 
 	'name',
 	'version',
@@ -1609,6 +1615,20 @@ our $buildstatistics = [
               'cachehits',
               'preinstallimage',
         ],
+];
+
+our $notifications = [
+    'notifications' =>
+	'next',
+	'sync',
+     [[ 'notification' =>
+	    'type',
+	    'time',
+	 [[ 'data' =>
+		'key',
+		'_content',
+	 ]],
+     ]],
 ];
 
 1;

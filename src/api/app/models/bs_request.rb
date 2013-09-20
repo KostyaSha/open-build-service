@@ -1,4 +1,5 @@
 require 'xmlhash'
+require 'event'
 require 'opensuse/backend'
 
 class BsRequest < ActiveRecord::Base
@@ -13,11 +14,13 @@ class BsRequest < ActiveRecord::Base
     setup 'request_save_error'
   end
 
+  scope :to_accept, -> { where(state: 'new').where("accept_at < ?", DateTime.now) }
+
   has_many :bs_request_actions, -> { includes([:bs_request_action_accept_info]) }, dependent: :destroy
   has_many :bs_request_histories, :dependent => :delete_all
   has_many :reviews, :dependent => :delete_all
   has_and_belongs_to_many :bs_request_action_groups, join_table: :group_request_requests
-  has_many :comments
+  has_many :comments, :dependent => :destroy
   validates_inclusion_of :state, :in => VALID_REQUEST_STATES
   validates :creator, :presence => true
   validate :check_supersede_state
@@ -65,10 +68,11 @@ class BsRequest < ActiveRecord::Base
       hashed['action']['type'] = 'submit'
     end
 
-    request = BsRequest.new
+    request = nil
 
     BsRequest.transaction do
 
+      request = BsRequest.new
       request.id = theid if theid
 
       actions = hashed.delete('action')
@@ -239,14 +243,9 @@ class BsRequest < ActiveRecord::Base
                                 state: self.state, superseded_by: self.superseded_by, created_at: self.updated_at
   end
 
-  def self.find_requests_to_accept
-     self.find(:all, :conditions => ['state = "new" AND accept_at < ?', DateTime.now])
-  end
-
   def change_state(state, opts = {})
     state = state.to_sym
-    BsRequest.transaction do
-      self.lock!
+    self.with_lock do
       create_history
 
       bs_request_actions.each do |a|
@@ -278,32 +277,18 @@ class BsRequest < ActiveRecord::Base
       end
       self.save!
 
-      notify = self.notify_parameters
-      notify[:oldstate] = oldstate
-      case state
-        when :accepted
-          Suse::Backend.send_notification('SRCSRV_REQUEST_ACCEPTED', notify)
-        when :declined
-          Suse::Backend.send_notification('SRCSRV_REQUEST_DECLINED', notify)
-        when :revoked
-          Suse::Backend.send_notification('SRCSRV_REQUEST_REVOKED', notify)
-        else
-          # nothing
-      end
-
+      create_state_notification_event('Request', oldstate: oldstate)
     end
   end
 
   def change_review_state(state, opts = {})
-    BsRequest.transaction do
+    self.with_lock do
       state = state.to_sym
 
       unless self.state == :review || (self.state == :new && state == :new)
         raise InvalidStateError.new 'request is not in review state'
       end
-      if !opts[:by_user] && !opts[:by_group] && !opts[:by_project]
-        raise InvalidReview.new
-      end
+      check_if_valid_review!(opts)
       unless [:new, :accepted, :declined, :superseded].include? state
         raise InvalidStateError.new "review state must be new, accepted, declined or superseded, was #{state}"
       end
@@ -381,25 +366,32 @@ class BsRequest < ActiveRecord::Base
 
       self.save!
 
-      notify = self.notify_parameters
-      if go_new_state
-        case state
-          when :accepted
-            Suse::Backend.send_notification('SRCSRV_REVIEW_ACCEPTED', notify)
-          when :declined
-            Suse::Backend.send_notification('SRCSRV_REVIEW_DECLINED', notify)
-          when :revoked
-            Suse::Backend.send_notification('SRCSRV_REVIEW_REVOKED', notify)
-        end
-      end
+      create_state_notification_event('Review') if go_new_state
+
+    end
+  end
+
+  def create_state_notification_event(prefix, additional_notify_parameters = {})
+    notify = notify_parameters.merge additional_notify_parameters
+    case state
+    when :accepted
+      "Event::#{prefix}Accepted".constantize.create notify
+    when :declined
+      "Event::#{prefix}Declined".constantize.create notify
+    when :revoked
+      "Event::#{prefix}Revoked".constantize.create notify
+    end
+  end
+
+  def check_if_valid_review!(opts)
+    if !opts[:by_user] && !opts[:by_group] && !opts[:by_project]
+      raise InvalidReview.new
     end
   end
 
   def addreview(opts)
-    BsRequest.transaction do
-      if !opts[:by_user] && !opts[:by_group] && !opts[:by_project]
-        raise InvalidReview.new
-      end
+    self.with_lock do
+      check_if_valid_review!(opts)
       create_history
 
       self.state = 'review'
@@ -411,212 +403,30 @@ class BsRequest < ActiveRecord::Base
                                       by_package: opts[:by_package], creator: User.current.login
       self.save!
 
-      hermes_type, params = newreview.notify_parameters(self.notify_parameters)
-      Suse::Backend.send_notification(hermes_type, params) if hermes_type
+      newreview.create_notification_event(self.notify_parameters)
     end
   end
 
   def send_state_change
-    Suse::Backend.send_notification('SRCSRV_REQUEST_STATECHANGE', self.notify_parameters) if self.state_was.to_s != self.state.to_s
+    Event::RequestStatechange.create(self.notify_parameters) if self.state_was.to_s != self.state.to_s
   end
 
   def notify_parameters(ret = {})
     ret[:id] = self.id
-    ret[:type] = '' # old style
     ret[:description] = self.description
     ret[:state] = self.state
     ret[:oldstate] = self.state_was if self.state_changed?
+    ret[:who] = User.current.login
     ret[:when] = self.updated_at.strftime('%Y-%m-%dT%H:%M:%S')
     ret[:comment] = self.comment
     ret[:author] = self.creator
 
-    if CONFIG['multiaction_notify_support']
-      # Use a nested data structure to support multiple actions in one request
-      ret[:actions] = []
-      self.bs_request_actions.each do |a|
-        ret[:actions] << a.notify_params
-      end
-    else
-      # This is the old code that doesn't handle multiple actions in one request.
-      # The last one just wins ....
-      # Needed until Hermes supports $reqinfo{'actions'}
-      self.bs_request_actions.each do |a|
-        ret = a.notify_params(ret)
-      end
+    # Use a nested data structure to support multiple actions in one request
+    ret[:actions] = []
+    self.bs_request_actions.each do |a|
+      ret[:actions] << a.notify_params
     end
     ret
-  end
-
-  def self.collection(opts)
-    roles = opts[:roles] || []
-    states = opts[:states] || []
-    types = opts[:types] || []
-    review_states = opts[:review_states] || %w(new)
-
-    rel = BsRequest.joins(:bs_request_actions)
-    c = ActiveRecord::Base.connection
-
-    # filter for request state(s)
-    unless states.blank?
-      rel = rel.where('bs_requests.state in (?)', states).references(:bs_requests)
-    end
-
-    # Filter by request type (submit, delete, ...)
-    unless types.blank?
-      rel = rel.where('bs_request_actions.type in (?)', types).references(:bs_request_actions)
-    end
-
-    unless opts[:project].blank?
-      inner_or = []
-
-      if opts[:package].blank?
-        if roles.count == 0 or roles.include? 'source'
-          rel = rel.references(:bs_request_actions)
-          if opts[:subprojects].blank?
-            inner_or << "bs_request_actions.source_project=#{c.quote(opts[:project])}"
-          else
-            inner_or << "(bs_request_actions.source_project like #{c.quote(opts[:project]+':%')})"
-          end
-        end
-        if roles.count == 0 or roles.include? 'target'
-          rel = rel.references(:bs_request_actions)
-          if opts[:subprojects].blank?
-            inner_or << "bs_request_actions.target_project=#{c.quote(opts[:project])}"
-          else
-            inner_or << "(bs_request_actions.target_project like #{c.quote(opts[:project]+':%')})"
-          end
-        end
-
-        if roles.count == 0 or roles.include? 'reviewer'
-          if states.count == 0 or states.include? 'review'
-            rel = rel.references(:reviews)
-            review_states.each do |r|
-              rel = rel.includes(:reviews)
-              inner_or << "(reviews.state=#{c.quote(r)} and reviews.by_project=#{c.quote(opts[:project])})"
-            end
-          end
-        end
-      else
-        if roles.count == 0 or roles.include? 'source'
-          rel = rel.references(:bs_request_actions)
-          inner_or << "(bs_request_actions.source_project=#{c.quote(opts[:project])} and bs_request_actions.source_package=#{c.quote(opts[:package])})"
-        end
-        if roles.count == 0 or roles.include? 'target'
-          rel = rel.references(:bs_request_actions)
-          inner_or << "(bs_request_actions.target_project=#{c.quote(opts[:project])} and bs_request_actions.target_package=#{c.quote(opts[:package])})"
-        end
-        if roles.count == 0 or roles.include? 'reviewer'
-          if states.count == 0 or states.include? 'review'
-            rel = rel.references(:reviews)
-            review_states.each do |r|
-              rel = rel.includes(:reviews)
-              inner_or << "(reviews.state=#{c.quote(r)} and reviews.by_project=#{c.quote(opts[:project])} and reviews.by_package=#{c.quote(opts[:package])})"
-            end
-          end
-        end
-      end
-
-      if inner_or.count > 0
-        rel = rel.where(inner_or.join(' or '))
-      end
-    end
-
-    if opts[:user]
-      inner_or = []
-      user = User.get_by_login(opts[:user])
-      # user's own submitted requests
-      if roles.count == 0 or roles.include? 'creator'
-        inner_or << "bs_requests.creator = #{c.quote(user.login)}"
-      end
-
-      # find requests where user is maintainer in target project
-      if roles.count == 0 or roles.include? 'maintainer'
-        names = user.involved_projects.map { |p| p.name }
-        rel = rel.references(:bs_request_actions)
-        inner_or << "bs_request_actions.target_project in ('" + names.join("','") + "')"
-
-        ## find request where user is maintainer in target package, except we have to project already
-        user.involved_packages.each do |ip|
-          rel = rel.references(:bs_request_actions)
-          inner_or << "(bs_request_actions.target_project='#{ip.project.name}' and bs_request_actions.target_package='#{ip.name}')"
-        end
-      end
-
-      if roles.count == 0 or roles.include? 'reviewer'
-        rel = rel.includes(:reviews).references(:reviews)
-        review_states.each do |r|
-
-          # requests where the user is reviewer or own requests that are in review by someone else
-          or_in_and = ["reviews.by_user=#{c.quote(user.login)}"]
-          # include all groups of user
-          usergroups = user.groups.map { |g| "'#{g.title}'" }
-          or_in_and << "reviews.by_group in (#{usergroups.join(',')})" unless usergroups.blank?
-
-          # find requests where user is maintainer in target project
-          userprojects = user.involved_projects.select('projects.name').map { |p| "'#{p.name}'" }
-          or_in_and << "reviews.by_project in (#{userprojects.join(',')})" unless userprojects.blank?
-
-          ## find request where user is maintainer in target package, except we have to project already
-          user.involved_packages.select('name,db_project_id').includes(:project).each do |ip|
-            or_in_and << "(reviews.by_project='#{ip.project.name}' and reviews.by_package='#{ip.name}')"
-          end
-
-          inner_or << "(reviews.state=#{c.quote(r)} and (#{or_in_and.join(' or ')}))"
-        end
-      end
-
-      unless inner_or.empty?
-        rel = rel.where(inner_or.join(' or '))
-      end
-    end
-
-    if opts[:group]
-      inner_or = []
-      group = Group.get_by_title(opts[:group])
-
-      # find requests where group is maintainer in target project
-      if roles.count == 0 or roles.include? 'maintainer'
-        names = group.involved_projects.map { |p| p.name }
-        rel = rel.references(:bs_request_actions)
-        inner_or << "bs_request_actions.target_project in ('" + names.join("','") + "')"
-
-        ## find request where group is maintainer in target package, except we have to project already
-        group.involved_packages.each do |ip|
-          inner_or << "(bs_request_actions.target_project='#{ip.project.name}' and bs_request_actions.target_package='#{ip.name}')"
-        end
-      end
-
-      if roles.count == 0 or roles.include? 'reviewer'
-        rel = rel.includes(:reviews).references(:reviews)
-
-        review_states.each do |r|
-
-          # requests where the user is reviewer or own requests that are in review by someone else
-          or_in_and = ["reviews.by_group='#{group.title}'"]
-
-          # find requests where group is maintainer in target project
-          groupprojects = group.involved_projects.select('projects.name').map { |p| "'#{p.name}'" }
-          or_in_and << "reviews.by_project in (#{groupprojects.join(',')})" unless groupprojects.blank?
-
-          ## find request where user is maintainer in target package, except we have to project already
-          group.involved_packages.select('name,db_project_id').includes(:project).each do |ip|
-            or_in_and << "(reviews.by_project='#{ip.project.name}' and reviews.by_package='#{ip.name}')"
-          end
-
-          inner_or << "(reviews.state='#{r}' and (#{or_in_and.join(' or ')}))"
-        end
-      end
-
-      unless inner_or.empty?
-        rel = rel.where(inner_or.join(' or '))
-      end
-    end
-
-    if opts[:ids]
-      rel = rel.where(:id => opts[:ids])
-    end
-
-    return rel
   end
 
   def review_matches_user?(review, user)
@@ -766,6 +576,7 @@ class BsRequest < ActiveRecord::Base
     result['state'] = self.state
     result['creator'] = self.creator
     result['created_at'] = self.created_at
+    result['accept_at'] = self.accept_at if self.accept_at
     result['superseded_by'] = self.superseded_by if self.superseded_by
     result['is_target_maintainer'] = self.is_target_maintainer?(User.current)
 
@@ -776,25 +587,41 @@ class BsRequest < ActiveRecord::Base
     result
   end
 
+  def auto_accept
+    self.with_lock do
+      r.bs_request_actions.each do |action|
+        action.execute_accept({ lowprio: 1, comment: "Auto accept" })
+      end
+
+      r.bs_request_actions.each do |action|
+        action.per_request_cleanup(:comment => "Auto accept")
+      end
+
+      r.change_state('accepted', :comment => "Auto accept")
+    end
+  end
+
   # Check if 'user' is maintainer in _all_ request targets:
-  def is_target_maintainer?(user)
+  def is_target_maintainer?(user = User.current)
     has_target, is_target_maintainer = false, true
     self.bs_request_actions.each do |a|
-      logger.debug "is_target_m #{a.inspect}"
-      if a.target_project
-        has_target = true
-        if a.target_package
-          tpkg = Package.find_by_project_and_name(a.target_project, a.target_package)
-          is_target_maintainer &= user.can_modify_package?(tpkg) if tpkg
-        else
-          tprj = Project.find_by_name(a.target_project)
-          is_target_maintainer &= user.can_modify_project?(tprj) if tprj
+      next unless a.target_project
+      if a.target_package
+        tpkg = Package.find_by_project_and_name(a.target_project, a.target_package)
+        if tpkg
+          has_target = true
+          is_target_maintainer &= user.can_modify_package?(tpkg)
+          next
         end
+      end
+      tprj = Project.find_by_name(a.target_project)
+      if tprj
+        has_target = true
+        is_target_maintainer &= user.can_modify_project?(tprj)
       end
     end
     has_target && is_target_maintainer
   end
-
 
   def webui_actions(with_diff = true)
     #TODO: Fix!
@@ -859,7 +686,6 @@ class BsRequest < ActiveRecord::Base
 
           if action[:tpkg] # API / Backend don't support whole project diff currently
             action[:sourcediff] = xml.webui_infos if with_diff
-                           # TODO2.4 BsRequest.sorted_filenames_from_sourcediff(sourcediff)
           end
         when :add_role then
           action[:name] = 'Add Role'

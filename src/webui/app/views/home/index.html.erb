@@ -49,7 +49,7 @@
       <% else %>
         <%= link_to(sprite_tag('user_edit') + " Edit your account", { :controller => "user", :action => "save_dialog", :user => @user }, {:id => 'save_dialog', :remote => true}) %><br />
       <% end %>
-      <% if CONFIG['change_passwd'] == :on and CONFIG['proxy_auth_mode'] != :on %>
+      <% if @configuration['change_password'] and CONFIG['proxy_auth_mode'] != :on %>
         <%= link_to(sprite_tag('key') + " Change your password", { :controller => "user", :action => "password_dialog", :user => @user }, {:id => 'password_dialog', :remote => true}) %><br />
       <% end %>
       </p>
@@ -60,8 +60,9 @@
 <div id="tabs1">
   <div class="box-header header-tabs">
     <ul>
-      <li><a href="#ipackages">Involved Packages</a></li>
-      <li><a href="#iprojects">Involved Projects</a></li>
+      <li><a href="#ipackages" title="Packages that you are involved with">Involved Packages</a></li>
+      <li><a href="#iprojects" title="Projects that you are involved with">Involved Projects</a></li>
+      <li><a href="#owned" title="Projects/Packages where you are responsible for the maintenance">Owned Project/Packages</a></li>
       <!-- <li><a href="#activity">Public Activity</a></li> -->
     </ul>
   </div>
@@ -81,6 +82,7 @@
       <p><i><%= @displayed_user.login %> is not involved in any packages</i></p>
     <% end %>
     </div>
+
     <div id="iprojects" class="tab">
     <% if @iprojects.blank? %>
       <p><i><%= @displayed_user.login %> is not involved in any projects</i></p>
@@ -98,6 +100,39 @@
     </div>
     <% end %>
     </div>
+
+    <div id="owned" class="tab">
+      <% if @owned.length > 0 %>
+        <table id='owned-table'>
+          <thead>
+          <tr>
+            <!-- <th>Product</th> -->
+            <th>Project/Package</th>
+          </tr>
+         </thead>
+         <tbody>
+          <% @owned.each do |i| -%>
+              <tr>
+                <!--
+                <td>
+                    <%= i[0] %>
+                </td>
+              -->
+                <td>
+                  <% if i[1] %>
+                    <%= render :partial => 'shared/project_or_package_link', :locals => {:project => i[2], :package => i[1],:short => true} %>
+                  <% else %>
+                    <%= render :partial => 'shared/project_or_package_link', :locals => {:project => i[2],  :short => true} %>
+                  <%end %>
+                </td>
+              </tr>
+          <% end -%>
+          </tbody>
+        </table>
+      <% else -%>
+        <p><%= @displayed_user.login %> doesn't own packages/projects.</p>
+      <% end %>
+      </div>
 <!--
     <div id="activity" class="tab">
       <p>Activity</p>
@@ -113,32 +148,23 @@
     <div id="tabs2">
       <div class="box-header header-tabs">
         <ul>
-          <li><a href="#irequests">Involved Requests (<%= @new_requests.count + @declined_requests.count %>)</a></li>
-          <li><a href="#ipatches">Involved Patchinfos (<%=@open_patchinfos.length %>)</a></li>
+          <li><a href="#irequests" title="Requests that require your action">Involved Requests (<%= @new_requests.count + @open_reviews.count +  @declined_requests.count %>)</a></li>
+          <li><a href="#ipatches" title="Open Patchinfos">Involved Patchinfos (<%=@open_patchinfos.length %>)</a></li>
+          <li></li>
         </ul>
       </div>
       <div id="irequests" class="tab">
-      <% if @open_reviews.count > 0 %>
-        <h3 title="Someone asks you to review a change.">Open Reviews</h3>
-        <%= render(:partial => 'shared/requests', :locals => { :requests => @open_reviews, :request_table_id => 'new_reviews_table', :hide_state => true }) %>
+      <% if @requests.count > 0 %>
+        <%= render(:partial => 'shared/requests', :locals => { :requests => @requests, :request_table_id => 'new_reviews_table', :hide_state => true }) %>
+        <p>
+        <%= link_to('See requests in any state.', :action => 'requests', :user => @displayed_user.to_s) %>
+        </p>
+      <% else %>
+        <p>
+        There is currently no action required from you on any request.
+        <%= link_to('See requests in any state.', :action => 'requests', :user => @displayed_user.to_s) %>
+        </p>
       <% end %>
-
-      <% if @new_requests.count >0 %>
-        <h3 title="Someone requests to change something in your packages.">New Requests For You</h3>
-        <%= render(:partial => 'shared/requests', :locals => { :requests => @new_requests, :request_table_id => 'new_requests_table', :hide_state => true }) %>
-      <% end %>
-
-      <% if @declined_requests.count > 0 %>
-        <h3 title="Some other party has declined a request you created.">Your Declined Requests</h3>
-        <%= render(:partial => 'shared/requests', :locals => { :requests => @declined_requests, :request_table_id => 'declined_requests_table', :hide_state => true }) %>
-      <% end %>
-
-      <% if (@open_reviews.count + @new_requests.count + @declined_requests.count) < 1 %>
-        <p><%= @displayed_user.login %> is not involved in any requests</p>
-      <% end %>
-
-      <h3>See all other requests</h3>
-      <p><%= link_to('Other requests', :action => 'requests', :user => @displayed_user.to_s) %></p>
       </div>
 
       <div id="ipatches" class="tab">
@@ -175,5 +201,12 @@
 <% content_for :ready_function do %>
       $( "#tabs1" ).tabs();
       $( "#tabs2" ).tabs();
+      <% if @owned.length > 0 %>
+        $('#owned-table').dataTable({
+                                          "bLengthChange": false,
+                                         "bStateSave": true,
+                                         "iDisplayLength": 15,
+                                        });
+      <% end %>
 <% end %>
 

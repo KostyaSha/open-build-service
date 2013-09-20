@@ -3,7 +3,10 @@ require 'minitest/unit'
 
 require 'simplecov'
 require 'simplecov-rcov'
-SimpleCov.start 'rails' if ENV["DO_COVERAGE"]
+SimpleCov.start 'rails' do
+  add_filter '/app/indices/'
+  add_filter '/app/models/user_ldap_stretegy.rb'
+end if ENV["DO_COVERAGE"]
 
 require File.expand_path('../../config/environment', __FILE__)
 require 'rails/test_help'
@@ -11,6 +14,8 @@ require 'rails/test_help'
 require 'webmock/minitest'
 
 require 'opensuse/backend'
+
+require './test/activexml_matcher'
 
 WebMock.disable_net_connect!(allow: CONFIG['source_host'])
 
@@ -65,7 +70,7 @@ module ActionDispatch
 
       def raw_post(path, data, parameters = nil, rack_env = nil)
         rack_env ||= Hash.new
-        rack_env['CONTENT_TYPE'] = 'application/octet-stream'
+        rack_env['CONTENT_TYPE'] ||= 'application/octet-stream'
         rack_env['CONTENT_LENGTH'] = data.length
         rack_env['RAW_POST_DATA'] = data
         process(:post, path, parameters, add_auth(rack_env))
@@ -73,7 +78,7 @@ module ActionDispatch
 
       def raw_put(path, data, parameters = nil, rack_env = nil)
         rack_env ||= Hash.new
-        rack_env['CONTENT_TYPE'] = 'application/octet-stream'
+        rack_env['CONTENT_TYPE'] ||= 'application/octet-stream'
         rack_env['CONTENT_LENGTH'] = data.length
         rack_env['RAW_POST_DATA'] = data
         process(:put, path, parameters, add_auth(rack_env))
@@ -187,6 +192,19 @@ module ActionDispatch
     def login_Iggy
       prepare_request_with_user "Iggy", "asdfasdf"
     end
+
+    def login_adrian
+      prepare_request_with_user "adrian", "so_alone"
+    end
+
+    def login_fred
+      prepare_request_with_user "fred", "geröllheimer"
+    end
+
+    def login_tom
+      prepare_request_with_user "tom", "thunder"
+    end
+
   end 
 end
 

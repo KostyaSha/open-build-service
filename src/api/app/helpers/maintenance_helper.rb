@@ -8,18 +8,16 @@ module MaintenanceHelper
     tprj = nil
     Project.transaction do
       mi = MaintenanceIncident.new( :maintenance_db_project => maintenanceProject ) 
-      tprj = Project.new :name => mi.project_name
+      tprj = Project.create :name => mi.project_name
       if baseProject
         # copy as much as possible from base project
         tprj.title = baseProject.title.dup if baseProject.title
         tprj.description = baseProject.description.dup if baseProject.description
-        tprj.save
         baseProject.flags.each do |f|
           tprj.flags.create(:status => f.status, :flag => f.flag)
         end
       else
         # mbranch call is enabling selected packages
-        tprj.save
         tprj.flags.create( :position => 1, :flag => 'build', :status => "disable" )
       end
       # publish is disabled, just patchinfos get enabled
@@ -29,7 +27,7 @@ module MaintenanceHelper
       end
       # take over roles from maintenance project
       maintenanceProject.relationships.each do |r| 
-        tprj.relationships.new(user: r.user, role: r.role, group: r.group)
+        tprj.relationships.create(user: r.user, role: r.role, group: r.group)
       end
       # set default bugowner if missing
       bugowner = Role.rolecache['bugowner']
@@ -296,7 +294,7 @@ module MaintenanceHelper
                 logger.error "read permission or data inconsistency, backend delivered package as linked package where no database object exists: #{e.attributes["project"]} / #{e.attributes["name"]}"
               else
                 # is incident ?
-                if ipkg.project.project_type == "maintenance_incident" 
+                if ipkg.project.is_maintenance_incident?
                   # is a newer incident ?
                   if incident_pkg.nil? or ipkg.project.name.gsub(/.*:/,'').to_i > incident_pkg.project.name.gsub(/.*:/,'').to_i
                     incident_pkg = ipkg
@@ -346,7 +344,7 @@ module MaintenanceHelper
         next unless p[:package].class == Package # only for local packages
 
         pkg = p[:package]
-        if pkg.package_kinds.find_by_kind 'link'
+        if pkg.is_of_kind? 'link'
           # is the package itself a local link ?
           link = Suse::Backend.get( "/source/#{p[:package].project.name}/#{p[:package].name}/_link")
           ret = ActiveXML::Node.new(link.body)
@@ -372,7 +370,7 @@ module MaintenanceHelper
             found = true if ep[:package] == ap
           end
           unless found
-            logger.info "found local linked package in project #{p[:package].project.name}/#{ap.name}, adding it as well, pointing it to #{p[:package].name} for #{target_package}"
+            logger.debug "found local linked package in project #{p[:package].project.name}/#{ap.name}, adding it as well, pointing it to #{p[:package].name} for #{target_package}"
             @packages.push({ :base_project => p[:base_project], :link_target_project => p[:link_target_project], :link_target_package => p[:package].name, :package => ap, :target_package => target_package, :local_link => 1 })
           end
         end
@@ -498,44 +496,12 @@ module MaintenanceHelper
       end
 
       # create repositories, if missing
-      if p[:link_target_project].class == Project
-        p[:link_target_project].repositories.each do |repo|
-          repoName = repo.name
-          if extend_names
-            repoName = p[:link_target_project].name.gsub(':', '_')
-            if p[:link_target_project].repositories.count > 1
-              # keep short names if project has just one repo
-              repoName += "_"+repo.name
-            end
-          end
-          if add_repositories
-            unless tprj.repositories.find_by_name(repoName)
-              trepo = tprj.repositories.create :name => repoName
-              repo.repository_architectures.each do |ra|
-                trepo.repository_architectures.create :architecture => ra.architecture, :position => ra.position
-              end
-              trepo.path_elements.create(:link => repo, :position => 1)
-              trigger = nil # no trigger is set by default
-              trigger = "maintenance" if MaintenanceIncident.find_by_db_project_id( tprj.id ) # is target an incident project ?
-              trepo.release_targets.create(:target_repository => repo, :trigger => trigger) if p[:link_target_project].project_type == "maintenance_release"
-            end
-            # enable package builds if project default is disabled
-            tpkg.flags.create( :position => 1, :flag => 'build', :status => "enable", :repo => repoName ) if tprj.flags.find_by_flag_and_status( 'build', 'disable' )
-            # take over debuginfo config from origin project
-            tpkg.flags.create( :position => 1, :flag => 'debuginfo', :status => "enable", :repo => repoName ) if prj.enabled_for?('debuginfo', repo.name, nil)
-          end
+      if add_repositories
+        if p[:link_target_project].class == Project
+          tprj.branch_to_repositories_from(p[:link_target_project], tpkg, extend_names)
+        else
+          # FIXME for remote project instances
         end
-        if add_repositories
-          # take over flags, but explicit disable publishing by default and enable building. Ommiting also lock or we can not create packages
-          p[:link_target_project].flags.each do |f|
-            unless [ "build", "publish", "lock" ].include?(f.flag)
-              tprj.flags.create(status: f.status, flag: f.flag, architecture: f.architecture, repo: f.repo)
-            end
-          end
-          tprj.flags.create(:status => "disable", :flag => 'publish') unless tprj.flags.find_by_flag_and_status( 'publish', 'disable' )
-        end
-      else
-        # FIXME for remote project instances
       end
       tpkg.store
 
@@ -549,39 +515,36 @@ module MaintenanceHelper
         linked_package = params[:target_package] if params[:target_package] and params[:package] == ret.package  # user enforce a rename of base package
         linked_package += "." + p[:link_target_project].name.gsub(':', '_') if extend_names
         ret.set_attribute('package', linked_package)
-        answer = Suse::Backend.put "/source/#{tpkg.project.name}/#{tpkg.name}/_link?user=#{CGI.escape(User.current.login)}", ret.dump_xml
+        Suse::Backend.put tpkg.source_path('_link', user: User.current.login), ret.dump_xml
         tpkg.sources_changed
       else
-        path = "/source/#{URI.escape(tpkg.project.name)}/#{URI.escape(tpkg.name)}"
-        oproject = p[:link_target_project].class == Project ? p[:link_target_project].name : p[:link_target_project]
-        myparam = { :cmd => "branch",
-                    :noservice => "1",
-                    :oproject => oproject,
-                    :opackage => p[:package],
-                    :user => User.current.login,
-                  }
-        myparam[:opackage] = p[:package].name if p[:package].class == Package
-        myparam[:orev] = p[:rev] if p[:rev] and not p[:rev].empty?
-        myparam[:missingok] = "1" if params[:missingok]
-        path <<  Suse::Backend.build_query_from_hash(myparam, [:cmd, :oproject, :opackage, :user, :comment, :orev, :missingok])
+        opackage = p[:package]
+        opackage = p[:package].name if p[:package].class == Package
+        oproject = p[:link_target_project]
+        oproject = p[:link_target_project].name if p[:link_target_project].class == Project
         # branch sources in backend
-        answer = Suse::Backend.post path, nil
+        tpkg.branch_from(oproject, opackage, p[:rev], params[:missingok])
         if response
           # multiple package transfers, just tell the target project
           response = {:targetproject => tpkg.project.name}
         else
           # just a single package transfer, detailed answer
-          response = {:targetproject => tpkg.project.name, :targetpackage => tpkg.name, :sourceproject => oproject, :sourcepackage => myparam[:opackage]}
+          response = {:targetproject => tpkg.project.name, :targetpackage => tpkg.name, :sourceproject => oproject, :sourcepackage => opackage}
         end
 
         # fetch newer sources from devel package, if defined
         if p[:copy_from_devel] and p[:copy_from_devel].project != tpkg.project
           msg="fetch+updates+from+devel+package+#{CGI.escape(p[:copy_from_devel].project.name)}/#{CGI.escape(p[:copy_from_devel].name)}"
-          msg="fetch+updates+from+open+incident+project+#{CGI.escape(p[:copy_from_devel].project.name)}" if p[:copy_from_devel].project.project_type == "maintenance_incident"
-          answer = Suse::Backend.post "/source/#{tpkg.project.name}/#{tpkg.name}?cmd=copy&keeplink=1&expand=1&oproject=#{CGI.escape(p[:copy_from_devel].project.name)}&opackage=#{CGI.escape(p[:copy_from_devel].name)}&user=#{CGI.escape(User.current.login)}&comment=#{msg}", nil
+          msg="fetch+updates+from+open+incident+project+#{CGI.escape(p[:copy_from_devel].project.name)}" if p[:copy_from_devel].project.is_maintenance_incident?
+          # TODO: make this a query hash
+          Suse::Backend.post tpkg.source_path + "?cmd=copy&keeplink=1&expand=1&oproject=#{CGI.escape(p[:copy_from_devel].project.name)}&opackage=#{CGI.escape(p[:copy_from_devel].name)}&user=#{CGI.escape(User.current.login)}&comment=#{msg}", nil
         end
 
         tpkg.sources_changed
+      end
+
+      if tprj.is_maintenance_incident?
+        tpkg.add_channels
       end
     end
 
@@ -604,7 +567,7 @@ module MaintenanceHelper
     else
       tpkg = Package.new(:name => targetPackageName, :title => sourcePackage.title, :description => sourcePackage.description)
       targetProject.packages << tpkg
-      if sourcePackage.package_kinds.find_by_kind 'patchinfo'
+      if sourcePackage.is_of_kind? 'patchinfo'
         # publish patchinfos only
         tpkg.flags.create( :flag => 'publish', :status => "enable" )
       end
@@ -645,7 +608,7 @@ module MaintenanceHelper
       upload_path = "/source/#{URI.escape(targetProject.name)}/#{URI.escape(targetPackageName)}"
       upload_path << Suse::Backend.build_query_from_hash(upload_params, [:user, :comment, :cmd, :noservice, :requestid])
       answer = Suse::Backend.post upload_path, "<directory> <entry name=\"_link\" md5=\"#{md5}\" /> </directory>"
-      tpkg.set_package_kind_from_commit(answer.body)
+      tpkg.sources_changed(answer)
     else
       # copy sources
       # backend copy of current sources as full copy
@@ -699,7 +662,7 @@ module MaintenanceHelper
     end
 
     # create or update main package linking to incident package
-    unless sourcePackage.package_kinds.find_by_kind 'patchinfo'
+    unless sourcePackage.is_of_kind? 'patchinfo'
       basePackageName = targetPackageName.gsub(/\.[^\.]*$/, '')
 
       # only if package does not contain a _patchinfo file
@@ -729,7 +692,7 @@ module MaintenanceHelper
       upload_path = "/source/#{URI.escape(targetProject.name)}/#{URI.escape(basePackageName)}"
       upload_path << Suse::Backend.build_query_from_hash(upload_params, [:user, :comment, :cmd, :noservice, :requestid])
       answer = Suse::Backend.post upload_path, "<directory> <entry name=\"_link\" md5=\"#{md5}\" /> </directory>"
-      lpkg.set_package_kind_from_commit(answer.body)
+      lpkg.sources_changed(answer)
     end
 
     # publish incident if source is read protect, but release target is not. assuming it got public now.

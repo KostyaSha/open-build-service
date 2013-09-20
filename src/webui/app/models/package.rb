@@ -84,45 +84,6 @@ class Package < ActiveXML::Node
     add_element('group', 'groupid' => opt[:groupid], 'role' => opt[:role])
   end
 
-  #removes persons based on attributes
-  def remove_person(person, role=nil)
-  end
-
-  def remove_persons( opt={} )
-    xpath="//person"
-    if not opt.empty?
-      opt_arr = []
-      opt.each {|k,v| opt_arr << "@#{k}='#{v}'" unless v.nil? or v.empty?}
-      xpath += "[#{opt_arr.join ' and '}]"
-    end
-    logger.debug "removing persons using xpath '#{xpath}'"
-    each(xpath) {|e| delete_element e}
-  end
-
-  def remove_group(opt={})
-    xpath="//group"
-    if not opt.empty?
-      opt_arr = []
-      opt.each {|k,v| opt_arr << "@#{k}='#{v}'" unless v.nil? or v.empty?}
-      xpath += "[#{opt_arr.join ' and '}]"
-    end
-    logger.debug "removing groups using xpath '#{xpath}'"
-    each(xpath) {|e| delete_element e }
-  end
-
-  def set_url( new_url )
-    logger.debug "set url #{new_url} for package #{self.name} (project #{self.project})"
-    add_element 'url' unless has_element? :url
-    url.text = new_url
-    save
-  end
-
-  def remove_url
-    logger.debug "remove url from package #{self.name} (project #{self.project})"
-    each('//url') { |e| delete_element e }
-    save
-  end
-
   def bugowners
     return users('bugowner')
   end
@@ -240,13 +201,13 @@ class Package < ActiveXML::Node
   def self.current_xsrcmd5(project, package )
     Directory.free_cache( :project => project, :package => package )
     dir = Directory.find_hashed( :project => project, :package => package )
-    return dir["xsrcmd5"]
+    return dir['xsrcmd5']
   end
 
   def self.current_rev(project, package )
     Directory.free_cache( :project => project, :package => package )
     dir = Directory.find_hashed( :project => project, :package => package )
-    return dir["rev"]
+    return dir['rev']
   end
 
   def cacheAllCommits
@@ -278,25 +239,27 @@ class Package < ActiveXML::Node
 
     frontend = ActiveXML::transport
     begin
-      answer = frontend.direct_http URI(path), :method => "GET"
+      answer = frontend.direct_http URI(path), :method => 'GET'
     rescue
       return nil
     end
 
     c = {}
     doc = ActiveXML::Node.new(answer)
-    doc.each("/revisionlist/revision") do |s|
-         c[:revision]= s.value("rev")
-         c[:user]    = s.find_first("user").text
-         c[:version] = s.find_first("version").text
-         c[:time]    = s.find_first("time").text
+    doc.each('/revisionlist/revision') do |s|
+         c[:revision]= s.value('rev')
+         c[:user]    = s.find_first('user').text
+         c[:version] = s.find_first('version').text
+         c[:time]    = s.find_first('time').text
          c[:srcmd5]  = s.find_first("srcmd5").text
          c[:comment] = nil
          c[:requestid] = nil
-         if comment=s.find_first("comment")
+         comment=s.find_first("comment")
+         if comment
            c[:comment] = comment.text
          end
-         if requestid=s.find_first("requestid")
+         requestid=s.find_first("requestid")
+         if requestid
            c[:requestid] = requestid.text
          end
     end
@@ -376,17 +339,6 @@ class Package < ActiveXML::Node
     rescue ActiveXML::Transport::Error
       return nil
     end
-  end
-
-  def issues_in_linkdiff
-    issues = {}
-    linkdiff = self.linkdiff()
-    if linkdiff.has_element?('issues')
-      linkdiff.issues.each(:issue) do |issue|
-        issues[issue.value('label')] = issue
-      end
-    end
-    return issues
   end
 
 end

@@ -83,16 +83,18 @@ class Service < ActiveXML::Node
       return nil
     end
 
+    def service_field(name, field)
+      s = findService(name)
+      return nil unless s
+      s[field] || ""
+    end
+
     def summary(name)
-      return nil unless s = findService(name)
-      return "" unless s[:summary]
-      s[:summary]
+      service_field(name, :summary)
     end
 
     def description(name)
-      return nil unless s = findService(name)
-      return "" unless s[:description]
-      s[:description]
+      service_field(name, :description)
     end
 
     def parameterDescription(serviceName, name)
@@ -141,6 +143,14 @@ class Service < ActiveXML::Node
      return false
   end
 
+  def fill_params(element, parameters)
+    parameters.each{ |p|
+      param = element.add_element('param', :name => p[:name])
+      param.text = p[:value]
+    }
+    true
+  end
+
   # parameters need to be given as an array with hash pairs :name and :value
   def addService( name, position=-1, parameters=[] )
      element = add_element 'service', 'name' => name
@@ -150,11 +160,7 @@ class Service < ActiveXML::Node
           element.move_before(service_elements[position-1])
 	end
      end
-     parameters.each{ |p|
-       param = element.add_element('param', :name => p[:name])
-       param.text = p[:value]
-     }
-     return true
+     fill_params(element, parameters)
   end
 
   def getParameters(serviceid)
@@ -174,17 +180,12 @@ class Service < ActiveXML::Node
      each("/services/service[#{serviceid}]/param") do |p|
        delete_element p
      end
-
-     parameters.each{ |p|
-        param = service.add_element('param', :name => p[:name])
-        param.text = p[:value]
-     }
-     return true
+     fill_params(service, parameters)
   end
 
   def moveService( from, to )
     return if from == to
-    service_elements = each("/services/service")
+    service_elements = each('/services/service')
     return false if service_elements.count < from or service_elements.count < to or service_elements.count <= 0
     logger.debug "moveService #{from}->#{to}"
     if from > to
@@ -204,7 +205,7 @@ class Service < ActiveXML::Node
       fc = FrontendCompat.new
       answer = fc.get_source opt
       doc = ActiveXML::Node.new(answer)
-      doc.each("/directory/serviceinfo/error") do |e|
+      doc.each('/directory/serviceinfo/error') do |e|
          return e.text
       end
     rescue
@@ -217,23 +218,23 @@ class Service < ActiveXML::Node
     opt[:project] = self.init_options[:project]
     opt[:package] = self.init_options[:package]
     opt[:expand]   = self.init_options[:expand]
-    opt[:cmd] = "runservice"
-    logger.debug "execute services"
+    opt[:cmd] = 'runservice'
+    logger.debug 'execute services'
     fc = FrontendCompat.new
     fc.do_post nil, opt
   end
 
   def save
-    if !has_element?("/services/service")
+    if !has_element?('/services/service')
         begin
 	   delete
         rescue ActiveXML::Transport::NotFoundError
            # to be ignored, if it's gone, it's gone
         end
     else
-	super(:comment => "Modified via webui")
+	super(:comment => 'Modified via webui')
         fc = FrontendCompat.new
-        fc.do_post nil, self.init_options.merge(:cmd => "runservice")
+        fc.do_post nil, self.init_options.merge(:cmd => 'runservice')
     end
     true
   end

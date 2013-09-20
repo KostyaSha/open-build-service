@@ -3,7 +3,7 @@ class XpathEngine
   require 'rexml/parsers/xpathparser'
 
   class IllegalXpathError < APIException
-    setup 400
+    setup "illegal_xpath_error", 400
   end
 
   def initialize
@@ -24,13 +24,6 @@ class XpathEngine
         '@project' => {:cpart => 'projects.name',
                        joins: 'LEFT JOIN projects ON packages.db_project_id=projects.id' },
         '@name' => {:cpart => 'packages.name'},
-        '@state' => {:cpart => 'issues.state', :joins => 
-          ['LEFT JOIN package_issues ON packages.id = package_issues.db_package_id',
-           'LEFT JOIN issues ON issues.id = package_issues.issue_id']},
-        'owner/@login' => {:cpart => 'users.login', :joins => 
-          ['LEFT JOIN package_issues ON packages.id = package_issues.db_package_id',
-           'LEFT JOIN issues ON issues.id = package_issues.issue_id',
-           'LEFT JOIN users ON users.id = issues.owner_id']},
         'title' => {:cpart => 'packages.title'},
         'description' => {:cpart => 'packages.description'},
         'kind' => {:cpart => 'package_kinds.kind', :joins =>
@@ -160,6 +153,7 @@ class XpathEngine
         '@id' => { :cpart => 'bs_requests.id' },
         'state/@name' => { :cpart => 'bs_requests.state' },
         'state/@who' => { :cpart => 'bs_requests.commenter' },
+        'state/@when' => { :cpart => 'bs_requests.updated_at' },
         'action/@type' => { :cpart => 'a.type',
                             joins: "LEFT JOIN bs_request_actions a ON a.bs_request_id = bs_requests.id"
         },
@@ -187,7 +181,7 @@ class XpathEngine
       }
     }
 
-    @operators = [:eq, :and, :or, :neq]
+    @operators = [:eq, :and, :or, :neq, :gt, :lt, :gteq, :lteq]
 
     @base_table = ""
     @conditions = []
@@ -428,6 +422,34 @@ class XpathEngine
     @conditions << condition
   end
 
+  def xpath_op_gt(root, lv, rv)
+    lval = evaluate_expr(lv, root)
+    rval = evaluate_expr(rv, root)
+
+    @conditions << "#{lval} > #{rval}"
+  end
+
+  def xpath_op_gteq(root, lv, rv)
+    lval = evaluate_expr(lv, root)
+    rval = evaluate_expr(rv, root)
+
+    @conditions << "#{lval} >= #{rval}"
+  end
+
+  def xpath_op_lt(root, lv, rv)
+    lval = evaluate_expr(lv, root)
+    rval = evaluate_expr(rv, root)
+
+    @conditions << "#{lval} < #{rval}"
+  end
+
+  def xpath_op_lteq(root, lv, rv)
+    lval = evaluate_expr(lv, root)
+    rval = evaluate_expr(rv, root)
+
+    @conditions << "#{lval} <= #{rval}"
+  end
+
   def xpath_op_and(root, lv, rv)
     #logger.debug "-- xpath_op_and(#{lv.inspect}, #{rv.inspect}) --"
     parse_predicate(root, lv)
@@ -435,7 +457,7 @@ class XpathEngine
     parse_predicate(root, rv)
     rv_cond = @conditions.pop
 
-    condition = "(#{lv_cond} AND #{rv_cond})"
+    condition = "((#{lv_cond}) AND (#{rv_cond}))"
     #logger.debug "-- condition: [#{condition}]"
 
     @conditions << condition
@@ -454,7 +476,7 @@ class XpathEngine
     elsif rv_cond == '0'
       condition = lv_cond
     else
-      condition = "(#{lv_cond} OR #{rv_cond})"
+      condition = "((#{lv_cond}) OR (#{rv_cond}))"
     end
     #logger.debug "-- condition: [#{condition}]"
 

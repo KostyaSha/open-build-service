@@ -55,6 +55,7 @@ BuildRequires:  perl-File-Sync >= 0.10
 BuildRequires:  perl-Net-SSLeay
 BuildRequires:  perl-Socket-MsgHdr
 BuildRequires:  perl-TimeDate
+BuildRequires:  perl-JSON-XS
 BuildRequires:  perl-XML-Parser
 BuildRequires:  xorg-x11-server
 PreReq:         /usr/sbin/useradd /usr/sbin/groupadd
@@ -68,6 +69,8 @@ PreReq:         git-core
 Requires:       patch
 # require the createrepo version which got used in the testsuite
 Requires:       %(/bin/bash -c 'rpm -q --qf "%%{name} = %%{version}" createrepo')
+# depend hard to new python-yum. There are too many broken versions of yum-common around.
+Requires:       python-yum
 
 %if 0%{?suse_version:1}
 BuildRequires:  fdupes
@@ -91,6 +94,7 @@ Requires:       perl-File-Sync >= 0.10
 Requires:       perl-Net-SSLeay
 Requires:       perl-Socket-MsgHdr
 Requires:       perl-XML-Parser
+Requires:       perl-JSON-XS
 
 %description
 The Open Build Service (OBS) backend is used to store all sources and binaries. It also
@@ -436,7 +440,6 @@ ln -sf /usr/lib/build $RPM_BUILD_ROOT/usr/lib/obs/server/build # just for check 
 # install executables and code
 cp -a * $RPM_BUILD_ROOT/usr/lib/obs/server/
 rm -r   $RPM_BUILD_ROOT/usr/lib/obs/server/testdata
-rm      $RPM_BUILD_ROOT/usr/lib/obs/server/Makefile.PL
 cd ..
 
 #
@@ -729,9 +732,6 @@ sed -i -e 's,[ ]*adapter: mysql$,  adapter: mysql2,' /srv/www/obs/webui/config/d
 /usr/lib/obs/server/bs_sshgit
 /usr/lib/obs/server/bs_warden
 /usr/lib/obs/server/worker
-/usr/lib/obs/server/BSSolv.pm
-/usr/lib/obs/server/BSSolv.xs
-/usr/lib/obs/server/typemap
 /usr/lib/obs/server/worker-deltagen.spec
 %config(noreplace) /usr/lib/obs/server/BSConfig.pm
 %config(noreplace) /etc/slp.reg.d/*
@@ -804,7 +804,6 @@ sed -i -e 's,[ ]*adapter: mysql$,  adapter: mysql2,' /srv/www/obs/webui/config/d
 %attr(0644,root,root) %config(noreplace) /srv/www/obs/api/config/options.yml*
 %dir %attr(0755,%apache_user,%apache_group) /srv/www/obs/api/db/sphinx
 %dir %attr(0755,%apache_user,%apache_group) /srv/www/obs/api/db/sphinx/production
-/srv/www/obs/api/config/environments/production_test.rb
 /srv/www/obs/api/.bundle
 
 %config /srv/www/obs/api/config/environment.rb

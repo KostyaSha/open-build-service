@@ -18,11 +18,11 @@ class StatusControllerTest < ActionDispatch::IntegrationTest
     put "/status/messages"
     assert_response 403
 
-    prepare_request_with_user "king", "sunflower"
+    login_king
     put "/status/messages", '<whereareyou/>'
     assert_response 400
 
-    prepare_request_with_user "king", "sunflower"
+    login_king
     put "/status/messages", '<message>I have nothing to say</message>'
     assert_response :success
   
@@ -35,12 +35,12 @@ class StatusControllerTest < ActionDispatch::IntegrationTest
     delete "/status/messages/#{messages.message.value('msg_id')}"
     assert_response 403
    
-    prepare_request_with_user "king", "sunflower"    
+    login_king    
     delete "/status/messages/#{messages.message.value('msg_id')}"
     assert_response :success
 
     delete "/status/messages/17"
-    assert_response 400
+    assert_response 404
    
     get "/status/messages" 
     messages = ActiveXML::Node.new @response.body
@@ -61,7 +61,7 @@ class StatusControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_bsrequest
-    get "/status/bsrequest?id=997"
+    get "/status/bsrequest?id=1"
     assert_xml_tag(:tag => "status", :attributes => {:code => 'not_found'})
     assert_response 404
   end

@@ -19,6 +19,13 @@ class HomeController < ApplicationController
       end
     end
     @ipackages = @displayed_user.involved_packages.each.map {|x| [x.name, x.project]}
+    begin
+      @owned = ReverseOwner.find_cached(:user => @displayed_user.login).each.map {|x| [x.rootproject, x.package, x.project]} 
+      # :limit => "#{@owner_limit}", :devel => "#{@owner_devel}"
+    rescue ActiveXML::Transport::Error
+    # OBSRootOwner isn't set...
+      @owned = []
+    end
     if @user == @displayed_user
       requests
     end
@@ -32,10 +39,13 @@ class HomeController < ApplicationController
     Rails.cache.delete(key) if discard_cache?
     content = Rails.cache.fetch(key, :expires_in => 5.hours) do
 
-      unless CONFIG['use_gravatar'] == :off
+      if @configuration['gravatar']
         email = Person.email_for_login(user)
         hash = Digest::MD5.hexdigest(email.downcase)
-        content = ActiveXML.transport.load_external_url("http://www.gravatar.com/avatar/#{hash}?s=#{size}&d=wavatar")
+        begin
+          content = ActiveXML.transport.load_external_url("http://www.gravatar.com/avatar/#{hash}?s=#{size}&d=wavatar")
+        rescue ActiveXML::Transport::Error
+        end
       end
 
       unless content
@@ -82,7 +92,7 @@ class HomeController < ApplicationController
   end
 
   def remove_watched_project
-    logger.debug "removing watched project '#{params[:project]}' from user '#@user'"
+    logger.debug "removing watched project '#{params[:project]}' from user '#{@user}'"
     @user.remove_watched_project(params[:project])
     @user.save
     render :partial => 'watch_list'

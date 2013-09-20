@@ -4,6 +4,8 @@ class Project < ActiveRecord::Base
   include FlagHelper
   include CanRenderModel
   include HasRelationships
+  include HasRatings
+  include HasAttributes
 
   class CycleError < APIException
     setup "project_cycle"
@@ -47,7 +49,6 @@ class Project < ActiveRecord::Base
 
   has_many :download_stats
   has_many :downloads, :dependent => :delete_all, foreign_key: :db_project_id
-  has_many :ratings, :as => :db_object, :dependent => :delete_all
 
   has_many :flags, dependent: :delete_all, foreign_key: :db_project_id
 
@@ -61,7 +62,7 @@ class Project < ActiveRecord::Base
   has_many  :develprojects, :class_name => "Project", :foreign_key => 'develproject_id'
   belongs_to :develproject, :class_name => "Project"
 
-  has_many :comments
+  has_many :comments, :dependent => :destroy
 
   default_scope { where("projects.id not in (?)", Relationship.forbidden_project_ids ) }
 
@@ -271,6 +272,15 @@ class Project < ActiveRecord::Base
 
   def is_locked?
       return true if flags.find_by_flag_and_status "lock", "enable"
+      return false
+  end
+
+  def is_maintenance_incident?
+      return true if self.project_type == "maintenance_incident"
+      return false
+  end
+  def is_maintenance?
+      return true if self.project_type == "maintenance"
       return false
   end
 
@@ -595,17 +605,9 @@ class Project < ActiveRecord::Base
       unless force
         #find repositories that link against this one and issue warning if found
         list = PathElement.where(repository_id: object.id)
-        error = ""
-        unless list.empty?
-          linking_repos = list.map {|x| x.repository.project.name+"/"+x.repository.name}.join "\n"
-          error << "Repository #{self.name}/#{name} cannot be deleted because following repos link against it:\n"+linking_repos
-        end
+        check_for_empty_repo_list!(list, "Repository #{self.name}/#{name} cannot be deleted because following repos link against it:")
         list = ReleaseTarget.where(target_repository_id: object.id)
-        unless list.empty?
-          linking_repos = list.map {|x| x.repository.project.name+"/"+x.repository.name}.join "\n"
-          error << "Repository #{self.name}/#{name} cannot be deleted because following repos define it as release target:/\n"+linking_repos
-        end
-        raise SaveError, error unless error.blank?
+        check_for_empty_repo_list!(list, "Repository #{self.name}/#{name} cannot be deleted because following repos define it as release target:/")
       end
       logger.debug "deleting repository '#{name}'"
       self.repositories.destroy object
@@ -615,6 +617,14 @@ class Project < ActiveRecord::Base
     #--- end update repositories ---#
     
     save!
+  end
+
+  def check_for_empty_repo_list!(list, error_prefix)
+    unless list.empty?
+      linking_repos = list.map { |x| x.repository.project.name+"/"+x.repository.name }.join "\n"
+      raise SaveError.new (error_prefix + "\n" + linking_repos)
+    end
+    linking_repos
   end
 
   def write_to_backend
@@ -645,114 +655,9 @@ class Project < ActiveRecord::Base
     Rails.cache.delete('xml_project_%d' % id)
   end
 
-  def store_attribute_axml( attrib, binary=nil )
-
-    raise SaveError, "attribute type without a namespace " if not attrib.namespace
-    raise SaveError, "attribute type without a name " if not attrib.name
-
-    # check attribute type
-    if ( not atype = AttribType.find_by_namespace_and_name(attrib.namespace, attrib.name) or atype.blank? )
-      raise SaveError, "unknown attribute type '#{attrib.namespace}:#{attrib.name}'"
-    end
-    # verify the number of allowed values
-    if atype.value_count and attrib.has_element? :value and atype.value_count != attrib.each_value.length
-      raise SaveError, "attribute '#{attrib.namespace}:#{attrib.name}' has #{attrib.each_value.length} values, but only #{atype.value_count} are allowed"
-    end
-    if atype.value_count and atype.value_count > 0 and not attrib.has_element? :value
-      raise SaveError, "attribute '#{attrib.namespace}:#{attrib.name}' requires #{atype.value_count} values, but none given"
-    end
-    if attrib.has_element? :issue and not atype.issue_list
-      raise SaveError, "attribute '#{attrib.namespace}:#{attrib.name}' has issue elements which are not allowed in this attribute"
-    end
-
-    # verify with allowed values for this attribute definition
-    unless atype.allowed_values.blank?
-      logger.debug( "Verify value with allowed" )
-      attrib.each_value.each do |value|
-        found = 0
-        atype.allowed_values.each do |allowed|
-          if allowed.value == value.to_s
-            found = 1
-            break
-          end
-        end
-        if found == 0
-          raise SaveError, "attribute value #{value} for '#{attrib.name} is not allowed'"
-        end
-      end
-    end
-
-    # update or create attribute entry
-    changed = false
-    a = find_attribute(attrib.namespace, attrib.name)
-    if a.nil?
-      # create the new attribute entry
-      a = self.attribs.create(:attrib_type => atype)
-      changed = true
-    end
-    # write values
-    changed = true if a.update_from_xml(attrib)
-    return changed
-  end
-
-  def write_attributes(comment=nil)
-    login = User.current.login
-    path = "/source/#{URI.escape(self.name)}/_project/_attribute?meta=1&user=#{CGI.escape(login)}"
-    path += "&comment=#{CGI.escape(opt[:comment])}" if comment
-    Suse::Backend.put_source( path, render_attribute_axml )
-  end
-
-  def find_attribute( namespace, name, binary=nil )
-    logger.debug "find_attribute for #{namespace}:#{name}"
-    if namespace.nil?
-      raise RuntimeError, "Namespace must be given"
-    end
-    if name.nil?
-      raise RuntimeError, "Name must be given"
-    end
-    if binary
-      raise RuntimeError, "binary packages are not allowed in project attributes"
-    end
-    a = attribs.nobinary.joins(:attrib_type => :attrib_namespace).where("attrib_types.name = ? and attrib_namespaces.name = ?", name, namespace).first
-    if a && a.readonly? # FIXME: joins make things read only
-      a = attribs.where(:id => a.id).first
-    end 
-    return a
-  end
-
-  def render_attribute_axml(params={})
-    builder = Nokogiri::XML::Builder.new
-
-    done={}
-    builder.attributes() do |a|
-      attribs.each do |attr|
-        next if params[:name] and not attr.attrib_type.name == params[:name]
-        next if params[:namespace] and not attr.attrib_type.attrib_namespace.name == params[:namespace]
-        type_name = attr.attrib_type.attrib_namespace.name+":"+attr.attrib_type.name
-        a.attribute(:name => attr.attrib_type.name, :namespace => attr.attrib_type.attrib_namespace.name) do |y|
-          done[type_name]=1
-          unless attr.issues.blank?
-            attr.issues.each do |ai|
-              y.issue(:name => ai.issue.name, :tracker => ai.issue.issue_tracker.name)
-            end
-          end
-          unless attr.values.blank?
-            attr.values.each do |val|
-              y.value(val.value)
-            end
-          else
-            if params[:with_default]
-              attr.attrib_type.default_values.each do |val|
-                y.value(val.value)
-              end
-            end
-          end
-        end
-      end
-    end
-    return builder.doc.to_xml :indent => 2, :encoding => 'UTF-8',
-                              :save_with => Nokogiri::XML::Node::SaveOptions::NO_DECLARATION |
-                                            Nokogiri::XML::Node::SaveOptions::FORMAT
+  # for the HasAttributes mixing
+  def attribute_url
+    "/source/#{CGI.escape(self.name)}/_project/_attribute"
   end
 
   # step down through namespaces until a project is found, returns found project or nil
@@ -795,25 +700,6 @@ class Project < ActiveRecord::Base
   def to_axml_id
     return "<project name='#{::Builder::XChar.encode(name)}'/>"
   end
-
-  def rating( user_id=nil )
-    score = 0
-    self.ratings.each do |rating|
-      score += rating.score
-    end
-    count = self.ratings.length
-    score = score.to_f
-    score /= count
-    score = -1 if score.nan?
-    score = ( score * 100 ).round.to_f / 100
-    if user_rating = self.ratings.find_by_user_id( user_id )
-      user_score = user_rating.score
-    else
-      user_score = 0
-    end
-    return { :score => score, :count => count, :user_score => user_score }
-  end
-
 
   def activity
     # the activity of a project is measured by the average activity
@@ -906,10 +792,6 @@ class Project < ActiveRecord::Base
       ret[flag_name] = flagret
     end
     ret
-  end
-
-  def complex_status(backend)
-    ProjectStatusHelper.calc_status(self)
   end
 
   # find a package in a project and its linked projects
@@ -1029,7 +911,7 @@ class Project < ActiveRecord::Base
       self.maintenance_project_id = project.id
       self.save!
       return true
-    elsif project.class == String
+    elsif project.is_a? String
       prj = Project.find_by_name(project)
       if prj
         self.maintenance_project_id = prj.id
@@ -1038,6 +920,62 @@ class Project < ActiveRecord::Base
       end
     end
     return false
+  end
+
+  def branch_to_repositories_from(project, pkg_to_enable, extend_names=nil)
+    project.repositories.each do |repo|
+      repoName = repo.name
+      if extend_names
+        repoName = project.name.gsub(':', '_')
+        if project.repositories.count > 1
+          # keep short names if project has just one repo
+          repoName += "_"+repo.name unless repo.name == "standard"
+        end
+      end
+      unless self.repositories.find_by_name(repoName)
+        trepo = self.repositories.create :name => repoName
+        repo.repository_architectures.each do |ra|
+          trepo.repository_architectures.create :architecture => ra.architecture, :position => ra.position
+        end
+        trepo.path_elements.create(:link => repo, :position => 1)
+        trigger = nil # no trigger is set by default
+        trigger = "maintenance" if MaintenanceIncident.find_by_db_project_id( self.id ) # is target an incident project ?
+        if project.project_type == "maintenance_release"
+          # branch from official release project?
+          trepo.release_targets.create(:target_repository => repo, :trigger => trigger)
+        elsif pkg_to_enable and pkg_to_enable.is_of_kind? 'channel'
+          # check if the channel has defined release targets
+          if cts = pkg_to_enable.channels.first.channel_targets
+            # branching a channel? set it's targets here as well
+            cts.each do |rt|
+              trepo.release_targets.create(:target_repository => rt.repository, :trigger => trigger)
+            end
+          else
+            # use repository targets as fallback
+            repo.release_targets.each do |rt|
+              trepo.release_targets.create(:target_repository => rt.target_repository, :trigger => trigger)
+            end
+          end
+        end
+      end
+      if pkg_to_enable and self.flags.find_by_flag_and_status( 'build', 'disable' )
+        # enable package builds if project default is disabled
+        pkg_to_enable.flags.create( :position => 1, :flag => 'build', :status => "enable", :repo => repoName )
+        pkg_to_enable.store
+      end
+      if pkg_to_enable and self.flags.find_by_flag_and_status( 'debuginfo', 'disable' )
+        # take over debuginfo config from origin project
+        pkg_to_enable.flags.create( :position => 1, :flag => 'debuginfo', :status => "enable", :repo => repoName )
+        pkg_to_enable.store
+      end
+    end
+    # take over flags, but explicit disable publishing by default and enable building. Ommiting also lock or we can not create packages
+    project.flags.each do |f|
+      unless [ "build", "publish", "lock" ].include?(f.flag)
+        self.flags.create(status: f.status, flag: f.flag, architecture: f.architecture, repo: f.repo)
+      end
+    end
+    self.flags.create(:status => "disable", :flag => 'publish') unless self.flags.find_by_flag_and_status( 'publish', 'disable' )
   end
 
   def open_requests_with_project_as_source_or_target
@@ -1118,23 +1056,29 @@ class Project < ActiveRecord::Base
     end
   end
 
+  after_save do
+    Rails.cache.delete "bsrequest_repos_map-#{self.name}"
+  end
+
   def bsrequest_repos_map(project)
-    ret = Hash.new
-    uri = "/getprojpack?project=#{CGI.escape(project.to_s)}&nopackages&withrepos&expandedrepos"
-    begin
-      xml = Xmlhash.parse(Suse::Backend.get(uri).body)
-    rescue ActiveXML::Transport::Error
-      return ret
-    end
-
-    xml['project'].elements('repository') do |repo|
-      repo.elements('path') do |path|
-        ret[path['project']] ||= Array.new
-        ret[path['project']] << repo
+    Rails.cache.fetch("bsrequest_repos_map-#{project}", expires_in: 2.hours) do
+      ret = Hash.new
+      uri = "/getprojpack?project=#{CGI.escape(project.to_s)}&nopackages&withrepos&expandedrepos"
+      begin
+        xml = Xmlhash.parse(Suse::Backend.get(uri).body)
+      rescue ActiveXML::Transport::Error
+        return ret
       end
-    end
 
-    return ret
+      xml['project'].elements('repository') do |repo|
+        repo.elements('path') do |path|
+          ret[path['project']] ||= Array.new
+          ret[path['project']] << repo
+        end
+      end
+
+      ret
+    end
   end
 
   private :bsrequest_repos_map
@@ -1167,9 +1111,9 @@ class Project < ActiveRecord::Base
     all_pkgs.each do |pkg|
       if b_pkg_index.has_key?(pkg) and not f_pkg_index.has_key?(pkg)
         # new autopackage, import in database
-	p = self.packages.new(name: pkg)
-	p.update_from_xml(Xmlhash.parse(b_pkg_index[pkg].dump_xml))
-	p.store
+        p = self.packages.new(name: pkg)
+        p.update_from_xml(Xmlhash.parse(b_pkg_index[pkg].dump_xml))
+        p.store
       elsif f_pkg_index.has_key?(pkg) and not b_pkg_index.has_key?(pkg)
         # autopackage was removed, remove from database
         f_pkg_index[pkg].destroy
@@ -1178,18 +1122,18 @@ class Project < ActiveRecord::Base
   end
 
   def request_ids_by_class
-    rel = BsRequest.collection(project: name, states: ['review'], roles: ['reviewer'])
-    reviews = rel.pluck("bs_requests.id")
+    rel = BsRequestCollection.new(project: name, states: ['review'], roles: ['reviewer'])
+    reviews = rel.ids
 
-    rel = BsRequest.collection(project: name, states: ['new'], roles: ['target'])
-    targets = rel.pluck("bs_requests.id")
+    rel = BsRequestCollection.new(project: name, states: ['new'], roles: ['target'])
+    targets = rel.ids
 
-    rel = BsRequest.collection(project: name, states: ['new'], roles: ['source'], types: ['maintenance_incident'])
-    incidents = rel.pluck("bs_requests.id")
+    rel = BsRequestCollection.new(project: name, states: ['new'], roles: ['source'], types: ['maintenance_incident'])
+    incidents = rel.ids
 
     if project_type == "maintenance"
-      rel = BsRequest.collection(project: name, states: ['new'], roles: ['source'], types: ['maintenance_release'], subprojects: true)
-      maintenance_release = rel.pluck("bs_requests.id")
+      rel = BsRequestCollection.new(project: name, states: ['new'], roles: ['source'], types: ['maintenance_release'], subprojects: true)
+      maintenance_release = rel.ids
     else
       maintenance_release = []
     end

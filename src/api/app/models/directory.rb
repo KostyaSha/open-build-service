@@ -1,10 +1,9 @@
 class Directory < ActiveXML::Node
 
   def self.hashed(opts)
-    path = "/source/#{opts[:project]}/#{opts[:package]}"
-    if opts[:expand]
-      path += "/?expand=1"
-    end
+    project = opts.delete :project
+    package = opts.delete :package
+    path = Package.source_path(project, package, nil, opts)
     d = nil
     begin
       d = Suse::Backend.get(path).body

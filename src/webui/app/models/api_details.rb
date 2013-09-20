@@ -24,12 +24,15 @@ class ApiDetails
     http_do :delete, route_name, *args
   end
 
-  def self.save_comments(route_name, params)
+  def self.save_comment(route_name, params)
     uri = "/webui/" +
     case route_name.to_sym
-      when :save_comments_for_projects then "comments/project/#{params[:project]}/new"
-      when :save_comments_for_packages then "comments/package/#{params[:project]}/#{params[:package]}/new"
-      when :save_comments_for_requests then "comments/request/#{params[:request_id]}/new"
+      when :save_project_comment then "comments/project/#{params[:project]}/new"
+      when :save_package_comment then "comments/package/#{params[:project]}/#{params[:package]}/new"
+      when :save_request_comment then "comments/request/#{params[:id]}/new"
+      when :delete_project_comment then "comments/project/#{params[:project]}/delete"
+      when :delete_package_comment then "comments/package/#{params[:project]}/#{params[:package]}/delete"
+      when :delete_request_comment then "comments/request/#{params[:id]}/delete"
     end
 
     uri = URI(uri)
@@ -67,6 +70,8 @@ class ApiDetails
       when :project_package_relationships then "projects/#{ids.first}/packages/#{ids.last}/relationships"
       when :for_user_project_relationships then "projects/#{ids.first}/relationships/for_user"
       when :for_user_project_package_relationships then "projects/#{ids.first}/packages/#{ids.last}/relationships/for_user"
+
+      when :package_rdiff then "projects/#{ids.first}/packages/#{ids.last}/rdiff"
 
       when :requests then "requests"
       when :request then "requests/#{ids.first}"

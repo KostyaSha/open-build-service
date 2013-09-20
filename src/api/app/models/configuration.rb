@@ -16,7 +16,6 @@ class Configuration < ActiveRecord::Base
                    :default_access_disabled => CONFIG['default_access_disabled'],
                    :allow_user_to_create_home_project => CONFIG['allow_user_to_create_home_project'],
                    :disallow_group_creation => CONFIG['disallow_group_creation_with_api'],
-                   :multiaction_notify_support => CONFIG['multiaction_notify_support'],
                    :change_password => CONFIG['change_passwd'],
                    :hide_private_options => CONFIG['hide_private_options'],
                    :gravatar => CONFIG['use_gravatar'],
@@ -28,7 +27,7 @@ class Configuration < ActiveRecord::Base
                    :no_proxy => nil,
                    :theme => CONFIG['theme'],
                  }
-  ON_OFF_OPTIONS = [ :anonymous, :default_access_disabled, :allow_user_to_create_home_project, :disallow_group_creation, :change_password, :hide_private_options, :gravatar, :download_on_demand, :enforce_project_keys, :multiaction_notify_support ]
+  ON_OFF_OPTIONS = [ :anonymous, :default_access_disabled, :allow_user_to_create_home_project, :disallow_group_creation, :change_password, :hide_private_options, :gravatar, :download_on_demand, :enforce_project_keys ]
    
   class << self
     def map_value(key, value)
@@ -44,7 +43,7 @@ class Configuration < ActiveRecord::Base
     end
 
     def anonymous?
-      Configuration.limit(1).pluck(:anonymous).first
+      @@anonymous ||= Configuration.limit(1).pluck(:anonymous).first
     end
    
     def registration
@@ -52,11 +51,16 @@ class Configuration < ActiveRecord::Base
     end
 
     def download_url
-      Configuration.limit(1).pluck(:download_url).first
+      @@download_url ||= Configuration.limit(1).pluck(:download_url).first
     end
 
     def ymp_url
-      Configuration.limit(1).pluck(:ymp_url).first
+      @@ymp_url ||= Configuration.limit(1).pluck(:ymp_url).first
+    end
+
+    # Check if ldap group support is enabled?
+    def ldapgroup_enabled?
+      return CONFIG['ldap_mode'] == :on && CONFIG['ldap_group_support'] == :on
     end
 
     def errbit_url

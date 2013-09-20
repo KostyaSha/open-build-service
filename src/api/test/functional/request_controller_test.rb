@@ -11,7 +11,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_set_and_get_1
-    prepare_request_with_user 'king', 'sunflower'
+    login_king
     # make sure there is at least one
     req = load_backend_file('request/1')
     post '/request?cmd=create', req
@@ -34,7 +34,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_create_invalid
-    prepare_request_with_user 'king', 'sunflower'
+    login_king
     post '/request?cmd=create', 'GRFZL'
     assert_response 400
   end
@@ -78,6 +78,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
     # sneak in a test case for the status controller
     get "/status/bsrequest?id=#{id}"
+    assert_response :success
     node = Xmlhash.parse(@response.body)
     assert_equal({'id' => id,
                      'repository' =>
@@ -158,7 +159,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_submit_request_with_broken_source
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/source/home:Iggy/TestPack?target_project=home:Iggy&target_package=TestPack.DELETE", :cmd => :branch
     assert_response :success
     post "/source/home:Iggy/TestPack.DELETE?target_project=home:Iggy&target_package=TestPack.DELETE2", :cmd => :branch
@@ -184,13 +185,13 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
 
     # accepting request fails in a valid way
-    prepare_request_with_user "king", "sunflower"
+    login_king
     post "/request/#{id1}?cmd=changestate&newstate=accepted&comment=review1&force=1"
     assert_response 400
     assert_xml_tag(:tag => "status", :attributes => {:code => 'expand_error'})
 
     # new requests are not possible anymore
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request?cmd=create", '<request>
                                    <action type="submit">
                                      <source project="home:Iggy" package="TestPack.DELETE2"/>
@@ -217,11 +218,11 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_submit_broken_request
-    prepare_request_with_user "king", "sunflower"
+    login_king
     put "/source/home:coolo:test/kdelibs_DEVEL_package/file", "CONTENT" # just to have a revision, or we fail
     assert_response :success
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request?cmd=create", load_backend_file('request/no_such_project')
     assert_response 404
     assert_xml_tag(:tag => "status", :attributes => {:code => 'unknown_project'})
@@ -260,14 +261,14 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_set_bugowner_request
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request?cmd=create", load_backend_file('request/set_bugowner')
     assert_response :success
     node = ActiveXML::Node.new(@response.body)
     assert node.has_attribute?(:id)
     id = node.value('id')
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request?cmd=create", load_backend_file('request/set_bugowner_fail')
     assert_response 404
     assert_xml_tag(:tag => "status", :attributes => {:code => 'unknown_package'})
@@ -281,23 +282,29 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "status", :attributes => {:code => 'not_found'})
 
     # test direct put
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     put "/request/#{id}", load_backend_file('request/set_bugowner')
     assert_response 403
 
-    prepare_request_with_user "king", "sunflower"
+    login_king
     put "/request/#{id}", load_backend_file('request/set_bugowner')
     assert_response :success
   end
 
-  # FIXME: we need a way to test this with api anonymous config and without
   def test_create_request_anonymous
+    # try it without anonymous - login required
     post "/request?cmd=create", load_backend_file('request/add_role')
+    assert_xml_tag tag: "status", attributes: { code: "authentication_required" }
+    assert_response 401
+
+    # now try as webui if we get a different error
+    post "/request?cmd=create", load_backend_file('request/add_role'), { 'HTTP_USER_AGENT' => 'obs-webui-something'}
+    assert_xml_tag tag: "status", attributes: { code: "anonymous_user" }
     assert_response 401
   end
 
   def test_add_role_request
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request?cmd=create", load_backend_file('request/add_role')
     assert_response :success
     node = ActiveXML::Node.new(@response.body)
@@ -316,7 +323,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_create_request_clone_and_superseed_it
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     req = load_backend_file('request/works')
     post "/request?cmd=create", req
     assert_response :success
@@ -327,7 +334,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
     # do the real mbranch for default maintained packages
     reset_auth
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     post "/source", :cmd => "branch", :request => id
     assert_response :success
 
@@ -346,7 +353,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_create_request_review_and_supersede
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     req = load_backend_file('request/works')
     post "/request?cmd=create", req
     assert_response :success
@@ -356,7 +363,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     id = node.value(:id)
 
     # add reviewer
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request/#{id}?cmd=addreview&by_user=tom"
     assert_response :success
     get "/request/#{id}"
@@ -367,7 +374,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_response 403
 
     # update comment for real
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/request/#{id}?cmd=changereviewstate&newstate=new&by_user=tom&comment=blahfasel"
     assert_response :success
     get "/request/#{id}"
@@ -395,7 +402,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_create_request_and_supersede
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     req = load_backend_file('request/works')
     post "/request?cmd=create", req
     assert_response :success
@@ -404,13 +411,13 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert node.has_attribute?(:id)
     id = node.value(:id)
 
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/request/#{id}?cmd=changestate&newstate=superseded&superseded_by=1"
     assert_response 403
     assert_xml_tag(:tag => "status", :attributes => {:code => "post_request_no_permission"})
 
     # target says supersede it due to another existing request
-    prepare_request_with_user 'adrian', 'so_alone'
+    login_adrian
     post "/request/#{id}?cmd=changestate&newstate=superseded&superseded_by=1"
     assert_response :success
 
@@ -421,7 +428,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   def test_create_request_and_supersede_as_creator
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     req = load_backend_file('request/works')
     post "/request?cmd=create", req
     assert_response :success
@@ -436,7 +443,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   def test_create_request_and_decline_review
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     req = load_backend_file('request/works')
     post "/request?cmd=create", req
     assert_response :success
@@ -446,14 +453,14 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     id = node.value(:id)
 
     # add reviewer
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request/#{id}?cmd=addreview&by_user=tom"
     assert_response :success
     get "/request/#{id}"
     assert_response :success
     assert_xml_tag(:tag => "review", :attributes => {:by_user => "tom"})
 
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/request/#{id}?cmd=changereviewstate&newstate=declined"
     assert_response 400
     assert_xml_tag(:tag => "status", :attributes => {:code => "review_not_specified"})
@@ -478,7 +485,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     # the birthday of J.K.
     Timecop.freeze(2010, 7, 12)
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post("/request?cmd=create", "<request>
                                    <action type='add_role'>
                                      <target project='home:Iggy' package='TestPack' />
@@ -495,7 +502,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     id = node.value(:id)
 
     # add reviewer
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     Timecop.freeze(1) # 0:0:1 review added
     post "/request/#{id}?cmd=addreview&by_user=tom&comment=couldyou"
     assert_response :success
@@ -504,7 +511,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "review", :attributes => {:by_user => "tom"})
 
     # accept review
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     Timecop.freeze(1) # 0:0:2 tom accepts review
     post "/request/#{id}?cmd=changereviewstate&newstate=accepted&by_user=tom&comment=review1"
     assert_response :success
@@ -513,7 +520,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "state", :attributes => {:name => "new"})
 
     # readd reviewer
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     Timecop.freeze(1) # 0:0:3 yet another review for tom
     post "/request/#{id}?cmd=addreview&by_user=tom&comment=overlooked"
     assert_response :success
@@ -522,7 +529,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "review", :attributes => {:by_user => "tom"})
 
     # accept review
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     Timecop.freeze(1) # 0:0:4 yet another review accept by tom
     post "/request/#{id}?cmd=changereviewstate&newstate=accepted&by_user=tom&comment=review2"
     assert_response :success
@@ -535,7 +542,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:parent => {:tag => "review", :attributes => {:by_user => "tom"}}, :tag => "comment", :content => 'review2')
 
     # reopen a review
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     Timecop.freeze(1) # 0:0:5 reopened from tom
     post "/request/#{id}?cmd=changereviewstate&newstate=new&by_user=tom&comment=reopen2", nil
     assert_response :success
@@ -639,7 +646,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   test "change_review_state_after_leaving_review_phase" do
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     req = load_backend_file('request/works')
     post "/request?cmd=create", req
     assert_response :success
@@ -649,7 +656,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     id = node.value(:id)
 
     # add reviewer
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request/#{id}?cmd=addreview&by_user=tom"
     assert_response :success
     get "/request/#{id}"
@@ -663,11 +670,11 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_xml_tag(:tag => "review", :attributes => {:by_group => "test_group"})
 
-    prepare_request_with_user 'adrian', 'so_alone'
+    login_adrian
     post "/request/#{id}?newstate=new&by_group=test_group&cmd=changereviewstate", "adrian is looking"
     post "/request/#{id}?newstate=new&by_group=test_group&cmd=changereviewstate", "adrian does not care"
 
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/request/#{id}?cmd=changereviewstate&newstate=declined&by_user=tom"
     assert_response :success
 
@@ -679,7 +686,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
                    child: {tag: 'comment', content: "adrian does not care"})
 
     # change review not permitted anymore
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/request/#{id}?cmd=changereviewstate&newstate=declined&by_group=test_group"
     assert_response 403
     assert_xml_tag :tag => "status", :attributes => {:code => "review_change_state_no_permission"}
@@ -696,7 +703,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_search_and_involved_requests
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
 
     # make sure there is at least one
     req = load_backend_file('request/1')
@@ -705,7 +712,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     node = ActiveXML::Node.new(@response.body)
     id = node.value :id
 
-    prepare_request_with_user "king", "sunflower"
+    login_king
     put("/request/#{id}", load_backend_file('request/1'))
     assert_response :success
 
@@ -715,7 +722,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "state", :attributes => {:name => 'new'})
 
     # via GET
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     get "/search/request", :match => "(state/@name='new' or state/@name='review') and (action/target/@project='kde4' and action/target/@package='wpa_supplicant')"
     assert_response :success
     assert_xml_tag(:tag => "request", :attributes => {:id => id})
@@ -761,10 +768,10 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     get "/request?view=collection&project=kde4&states=new,review"
     assert_response :success
     assert_xml_tag(:tag => 'collection', :child => {:tag => 'request'})
-    assert_xml_tag(:tag => "collection", :attributes => {:matches => "3"})
+    assert_xml_tag(:tag => "collection", :attributes => {:matches => "4"})
 
     # tom searches for all request of adrian, but adrian has one in a hidden project which must not be viewable ...
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     get "/request?view=collection&user=adrian&states=new,review"
     assert_response :success
     assert_xml_tag(:tag => 'collection', :child => {:tag => 'request'})
@@ -772,7 +779,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
     if $ENABLE_BROKEN_TEST
       # ... but adrian gets it
-      prepare_request_with_user "adrian", "so_alone"
+      login_adrian
       get "/request?view=collection&user=adrian&states=new,review"
       assert_response :success
       assert_xml_tag(:tag => 'collection', :child => {:tag => 'request'})
@@ -782,7 +789,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_process_devel_request
-    prepare_request_with_user "king", "sunflower"
+    login_king
 
     get "/source/home:Iggy/TestPack/_meta"
     assert_response :success
@@ -818,11 +825,11 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     iddelete = node.value(:id)
 
     # try to approve change_devel
-    prepare_request_with_user "adrian", "so_alone"
+    login_adrian
     post "/request/#{id}?cmd=changestate&newstate=accepted"
     assert_response 403
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request/#{id}?cmd=changestate&newstate=accepted"
     assert_response :success
 
@@ -843,7 +850,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
 
     # try to delete package via old request, it should fail
-    prepare_request_with_user "king", "sunflower"
+    login_king
     post "/request/#{iddelete}?cmd=changestate&newstate=accepted"
     assert_response 400
 
@@ -854,7 +861,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_reject_request_creation
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
 
     # block request creation in project
     post "/source/home:Iggy/_attribute", "<attributes><attribute namespace='OBS' name='RejectRequests'> <value>Go Away</value> </attribute> </attributes>"
@@ -949,7 +956,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_submit_request_from_hidden_project_and_hidden_source
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/request?cmd=create", '<request>
                                    <action type="submit">
                                      <source project="HiddenProject" package="pack" rev="1"/>
@@ -999,7 +1006,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_auto_revoke_when_source_gets_removed_maintenance_incident
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/source/kde4/kdebase", :cmd => :branch
     assert_response :success
     post "/request?cmd=create", '<request>
@@ -1014,12 +1021,12 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert node.has_attribute?(:id)
     id1 = node.value(:id)
 
-    prepare_request_with_user 'king', 'sunflower'
+    login_king
     post "/request/#{id1}?cmd=changestate&newstate=declined"
     assert_response :success
 
     # delete projects
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     delete "/source/home:tom:branches:kde4"
     assert_response :success
 
@@ -1029,18 +1036,18 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "state", :attributes => {:name => "revoked"})
 
     # test revoke
-    prepare_request_with_user 'adrian', 'so_alone'
+    login_adrian
     post "/request/#{id1}?cmd=changestate&newstate=declined"
     assert_response 403
   end
 
   def test_auto_revoke_when_source_gets_removed_submit
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/source/kde4/kdebase", :cmd => :branch
     assert_response :success
     post "/request?cmd=create", '<request>
                                    <action type="submit">
-                                     <source project="home:tom:branches:kde4" package="kdebase" rev="1"/>
+                                     <source project="home:tom:branches:kde4" package="kdebase" rev="0"/>
                                    </action>
                                    <state name="new" />
                                  </request>'
@@ -1054,7 +1061,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     post "/request?cmd=create", '<request>
                                    <action type="submit">
-                                     <source project="home:tom:branches:home:tom:branches:kde4" package="kdebase" rev="1"/>
+                                     <source project="home:tom:branches:home:tom:branches:kde4" package="kdebase" rev="0"/>
                                    </action>
                                    <state name="new" />
                                  </request>'
@@ -1076,27 +1083,27 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "state", :attributes => {:name => "revoked"})
 
     # test decline and revoke
-    prepare_request_with_user 'adrian', 'so_alone'
+    login_adrian
     post "/request/#{id1}?cmd=changestate&newstate=declined"
     assert_response 403 # set back is not allowed
   end
 
   def test_revoke_and_decline_when_projects_are_not_existing_anymore
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
 
     # test revoke, the request is part of fixtures
-    post "/request/999?cmd=changestate&newstate=revoked"
+    post "/request/3?cmd=changestate&newstate=revoked"
     assert_response :success
     # missing target project
-    post "/request/998?cmd=changestate&newstate=revoked"
+    post "/request/2?cmd=changestate&newstate=revoked"
     assert_response :success
 
     # missing source project
-    post "/request/997?cmd=changestate&newstate=declined"
+    post "/request/1?cmd=changestate&newstate=declined"
     assert_response 403
 
-    prepare_request_with_user 'adrian', 'so_alone'
-    post "/request/997?cmd=changestate&newstate=declined"
+    login_adrian
+    post "/request/1?cmd=changestate&newstate=declined"
     assert_response :success
   end
 
@@ -1114,11 +1121,13 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_select "status[code] > summary", /Authentication required/
 
     # create request by non-maintainer => validate created review item
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/request?cmd=create", req
     assert_response :success
     assert_xml_tag(:tag => "request")
     assert_xml_tag(:tag => "review", :attributes => {:by_project => "home:Iggy", :by_package => "TestPack"})
+    assert_xml_tag(:tag => "review", :attributes => {:by_user => "adrian"})
+    assert_xml_tag(:tag => "review", :attributes => {:by_group => "test_group"})
     node = ActiveXML::Node.new(@response.body)
     assert node.has_attribute?(:id)
     id_by_package = node.value(:id)
@@ -1140,9 +1149,9 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "review", :attributes => {:by_project => "home:Iggy", :by_package => "TestPack"})
 
     # create request by maintainer
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     req = load_backend_file('request/submit_without_target')
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request?cmd=create", req
     assert_response 400
     assert_xml_tag(:tag => "status", :attributes => {:code => 'unknown_target_package'})
@@ -1157,19 +1166,19 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     id = node.value(:id)
 
     # add reviewer
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/request/#{id}?cmd=addreview&by_user=adrian"
     assert_response 403
     assert_xml_tag(:tag => "status", :attributes => {:code => 'addreview_not_permitted'})
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request/#{id}?cmd=addreview&by_user=tom"
     assert_response :success
     get "/request/#{id}"
     assert_response :success
     assert_xml_tag(:tag => "review", :attributes => {:by_user => "tom"})
 
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/request/#{id}?cmd=addreview&by_group=test_group"
     assert_response :success
     get "/request/#{id}"
@@ -1203,14 +1212,14 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     post "/request/#{id}?cmd=changestate&newstate=revoked"
     assert_response 401
 
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/request/#{id}?cmd=changestate&newstate=revoked"
     assert_response 403
     post "/request/ILLEGAL_CONTENT?cmd=changestate&newstate=revoked"
     assert_response 404
     assert_xml_tag tag: "status", attributes: {code: "not_found"}
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request/#{id}?cmd=changestate&newstate=revoked"
     assert_response :success
 
@@ -1223,11 +1232,11 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     post "/request/#{id_by_package}?cmd=changereviewstate&newstate=declined&by_project=home:Iggy&by_package=TestPack"
     assert_response 401
 
-    prepare_request_with_user 'tom', 'thunder'
+    login_tom
     post "/request/#{id_by_package}?cmd=changereviewstate&newstate=declined&by_project=home:Iggy&by_package=TestPack"
     assert_response 403
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request/#{id_by_package}?cmd=changereviewstate&newstate=declined&by_project=home:Iggy&by_package=TestPack"
     assert_response :success
 
@@ -1247,7 +1256,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_submit_cleanup_in_not_writable_source
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     %w(cleanup update).each do |modify|
       req = "<request>
               <action type='submit'>
@@ -1281,7 +1290,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   def test_reopen_a_review_declined_request
     %w(new review).each do |newstate|
-      prepare_request_with_user "Iggy", "asdfasdf"
+      login_Iggy
       post "/source/Apache/apache2", :cmd => :branch
       assert_response :success
 
@@ -1291,7 +1300,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
       req = "<request>
               <action type='submit'>
-                <source project='home:Iggy:branches:Apache' package='apache2' rev='1' />
+                <source project='home:Iggy:branches:Apache' package='apache2' rev='2' />
               </action>
               <description/>
             </request>"
@@ -1310,7 +1319,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
       assert_xml_tag(:tag => "review", :attributes => {:by_user => "fred"})
 
       # reviewer declines
-      prepare_request_with_user "fred", "geröllheimer"
+      login_fred
       post "/request/#{id}?cmd=changereviewstate&by_user=fred&newstate=declined"
       assert_response :success
       get "/request/#{id}"
@@ -1318,7 +1327,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
       assert_xml_tag(:tag => "review", :attributes => {:state => "declined", :by_user => "fred"})
 
       # reopen it again and validate that the request opens the review as well
-      prepare_request_with_user "Iggy", "asdfasdf"
+      login_Iggy
       post "/request/#{id}?cmd=changestate&newstate=#{newstate}&comment=But+I+want+it"
       assert_response :success
       get "/request/#{id}"
@@ -1333,7 +1342,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_reopen_revoked_and_declined_request
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/source/Apache/apache2", :cmd => :branch
     assert_response :success
 
@@ -1343,7 +1352,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
     req = "<request>
             <action type='submit'>
-              <source project='home:Iggy:branches:Apache' package='apache2' rev='1' />
+              <source project='home:Iggy:branches:Apache' package='apache2' rev='0' />
             </action>
             <description/>
           </request>"
@@ -1362,7 +1371,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "state", :attributes => {:name => "revoked"})
 
     # and reopen it as a non-maintainer is not working
-    prepare_request_with_user "adrian", "so_alone"
+    login_adrian
     post "/request/#{id}?cmd=changestate&newstate=new"
     assert_response 403
     # and reopen it as a non-source-maintainer is not working
@@ -1371,7 +1380,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_response 403
 
     # reopen it again
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request/#{id}?cmd=changestate&newstate=new"
     assert_response :success
     get "/request/#{id}"
@@ -1379,7 +1388,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "state", :attributes => {:name => "new"})
 
     # target is declining it
-    prepare_request_with_user "fred", "geröllheimer"
+    login_fred
     post "/request/#{id}?cmd=changestate&newstate=declined"
     assert_response :success
     get "/request/#{id}"
@@ -1393,7 +1402,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "request", :attributes => {:id => id})
 
     # find it as another user
-    prepare_request_with_user "adrian", "so_alone"
+    login_adrian
     get "/request?view=collection&user=Iggy&states=declined&roles=creator"
     assert_response :success
     assert_xml_tag(:tag => 'collection', :child => {:tag => 'request'})
@@ -1414,10 +1423,15 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   def test_all_action_types
     req = load_backend_file('request/cover_all_action_types_request')
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
 
     # create kdelibs package
     post "/source/kde4/kdebase", :cmd => :branch
+    assert_response :success
+    post "/request?cmd=create", req
+    assert_response 400
+    assert_xml_tag(:tag => "status", :attributes => {:code => "missing_action"})
+    put "/source/home:Iggy:branches:kde4/kdebase/change", "avoid failure of unchanged package submit"
     assert_response :success
     post "/request?cmd=create", req
     assert_response :success
@@ -1428,13 +1442,13 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
     # do not accept request in review state
     get "/request/#{id}"
-    prepare_request_with_user "fred", "geröllheimer"
+    login_fred
     post "/request/#{id}?cmd=changestate&newstate=accepted"
     assert_response 403
     assert_match(/Request is in review state/, @response.body)
 
     # approve reviews
-    prepare_request_with_user "adrian", "so_alone"
+    login_adrian
     post "/request/#{id}?cmd=changereviewstate&newstate=accepted&by_user=adrian"
     assert_response :success
     get "/request/#{id}"
@@ -1447,7 +1461,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "state", :attributes => {:name => "review"})
 
     # a review has been added because we are not maintainer of current devel package, accept it.
-    prepare_request_with_user "king", "sunflower"
+    login_king
     get "/request/#{id}"
     assert_response :success
     assert_xml_tag(:tag => "state", :attributes => {:name => "review"})
@@ -1459,7 +1473,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "state", :attributes => {:name => "new"})
 
     # reopen the review
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     post "/request/#{id}?cmd=changereviewstate&newstate=new&by_group=INEXISTENT"
     assert_response 404
     assert_xml_tag(:tag => "status", :attributes => {:code => 'not_found'})
@@ -1479,7 +1493,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "state", :attributes => {:name => "new"})
 
     # validate our existing test data and fixtures
-    prepare_request_with_user "king", "sunflower"
+    login_king
     get "/source/home:Iggy/ToBeDeletedTestPack/_meta"
     assert_response :success
     get "/source/home:fred:DeleteProject/_meta"
@@ -1499,7 +1513,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_no_xml_tag(:tag => "group", :attributes => {:groupid => "test_group", :role => "reader"})
 
     # Successful accept the request
-    prepare_request_with_user "fred", "geröllheimer"
+    login_fred
     post "/request/#{id}?cmd=changestate&newstate=accepted"
     assert_response :success
 
@@ -1528,7 +1542,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     # cleanup
     delete "/source/kde4/Testing"
     assert_response :success
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     delete "/source/home:Iggy:branches:kde4"
     assert_response :success
   end
@@ -1536,7 +1550,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   def test_submit_with_review
     req = load_backend_file('request/submit_with_review')
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request?cmd=create", req
     assert_response :success
     # we upload 2 and 2 default reviewers are added
@@ -1566,7 +1580,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_match(/Couldn't find BsRequest with id=987654321/, @response.body)
 
     # Only partly matching by_ arguments
-    prepare_request_with_user "adrian", "so_alone"
+    login_adrian
     post "/request/#{id}?cmd=changereviewstate&newstate=accepted&by_user=adrian&by_group=test_group_b"
     assert_response 403
     assert_match(/review state change for group test_group_b is not permitted for adrian/, @response.body)
@@ -1602,7 +1616,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   def test_reviewer_added_when_source_maintainer_is_missing
     # create request
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     req = "<request>
             <action type='submit'>
               <source project='BaseDistro2.0' package='pack2' rev='1' />
@@ -1623,12 +1637,12 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "review", :attributes => {:by_project => "BaseDistro2.0", :by_package => "pack2"})
 
     # set project to approve it
-    prepare_request_with_user "king", "sunflower"
+    login_king
     post "/source/BaseDistro2.0/_attribute", "<attributes><attribute namespace='OBS' name='ApprovedRequestSource' /></attributes>"
     assert_response :success
 
     # create request again
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     req = "<request>
             <action type='submit'>
               <source project='BaseDistro2.0' package='pack2' rev='1' />
@@ -1649,19 +1663,19 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_no_xml_tag(:tag => "review", :attributes => {:by_project => "BaseDistro2.0", :by_package => "pack2"})
 
     # cleanup attribute
-    prepare_request_with_user "king", "sunflower"
+    login_king
     delete "/source/BaseDistro2.0/_attribute/OBS:ApprovedRequestSource"
     assert_response :success
   end
 
   def test_branch_and_submit_request_to_linked_project_and_delete_it_again
     # create ower playground
-    prepare_request_with_user "king", "sunflower"
+    login_king
     put "/source/DummY/_meta", "<project name='DummY'><title/><description/><link project='BaseDistro2.0'/></project>"
     assert_response :success
 
     # branch a package which does not exist in project, but project is linked
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     post "/source/DummY/pack2", :cmd => :branch
     assert_response :success
 
@@ -1692,7 +1706,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     id = node.value(:id)
 
     # accept the request
-    prepare_request_with_user "king", "sunflower"
+    login_king
     post "/request/#{id}?cmd=changestate&newstate=accepted"
     assert_response :success
 
@@ -1740,7 +1754,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:parent => {:tag => "file", :attributes => {:state => "changed"}}, :tag => "old", :attributes => {:name => "_link"})
 
     # accept the request
-    prepare_request_with_user "king", "sunflower"
+    login_king
     post "/request/#{id}?cmd=changestate&newstate=accepted&force=1"
     assert_response :success
 
@@ -1762,7 +1776,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
     ###
     # create delete request two times
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     req = "<request>
             <action type='delete'>
               <target project='DummY' package='pack2'/>
@@ -1791,7 +1805,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     id3 = node.value(:id)
 
     # accept the request
-    prepare_request_with_user "king", "sunflower"
+    login_king
     post "/request/#{id}?cmd=changestate&newstate=accepted&force=1"
     assert_response :success
     get "/request/#{id}"
@@ -1808,7 +1822,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:parent => {:tag => "revision"}, :tag => "requestid", :content => id)
 
     # accept the other request, what will fail
-    prepare_request_with_user "king", "sunflower"
+    login_king
     post "/request/#{id2}?cmd=changestate&newstate=accepted&force=1"
     assert_response 400
     assert_xml_tag(:tag => "status", :attributes => {:code => 'not_existing_target'})
@@ -1821,7 +1835,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "state", :attributes => {:name => 'declined'})
 
     # submitter is accepting the decline => revoke
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     post "/request/#{id2}?cmd=changestate&newstate=revoked"
     assert_response :success
     get "/request/#{id2}"
@@ -1829,7 +1843,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "state", :attributes => {:name => 'revoked'})
 
     # try to decline it again after revoke
-    prepare_request_with_user "king", "sunflower"
+    login_king
     post "/request/#{id2}?cmd=changestate&newstate=declined"
     assert_response 403
     assert_match(/set state to declined from a final state is not allowed./, @response.body)
@@ -1847,7 +1861,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_auto_accept_request
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     # create request with auto accept in far future
     req = "<request>
             <action type='delete'>
@@ -1863,7 +1877,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_xml_tag(:tag => "status", :attributes => {:code => 'post_request_no_permission'})
 
     # works as user with write permission in target
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request?cmd=create", req
     assert_response :success
     assert_xml_tag(:tag => "request")
@@ -1891,7 +1905,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   def test_branch_version_update_and_submit_request_back
     # branch a package which does not exist in project, but project is linked
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     post "/source/home:Iggy/TestPack", :cmd => :branch
     assert_response :success
 
@@ -1933,7 +1947,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
     # decline it and try to accept it
     # must not work to avoid races between multiple users
-    prepare_request_with_user "king", "sunflower"
+    login_king
     post "/request/#{id}?cmd=changestate&newstate=declined"
     assert_response :success
     post "/request/#{id}?cmd=changestate&newstate=accepted"
@@ -1987,7 +2001,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     reset_auth
     post "/request/#{id}?cmd=diff", nil
     assert_response 401
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request/#{id}?cmd=diff", nil
     # make sure to always either show a diff or an error - empty diff is not an option
     assert_response 403
@@ -2021,7 +2035,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   ## create request to hidden package from hidden place - valid user - success
   def test_create_request_to_hidden_package_from_hidden_place_valid_user
-    prepare_request_with_user "king", "sunflower"
+    login_king
     put "/source/HiddenProject/target/file", "ASD"
     assert_response :success
     request_hidden("adrian", "so_alone", 'request/to_hidden_from_hidden_valid')
@@ -2057,19 +2071,19 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   ### bugowner
   ### role 
   def test_hidden_add_role_request
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request?cmd=create", load_backend_file('request/hidden_add_role_fail')
     # should fail as this user shouldn't see the target package at all.
     assert_response 404 if $ENABLE_BROKEN_TEST
     reset_auth
-    prepare_request_with_user "adrian", "so_alone"
+    login_adrian
     post "/request?cmd=create", load_backend_file('request/hidden_add_role')
     assert_response :success
   end
 
   # bugreport bnc #674760
   def test_try_to_delete_project_without_permissions
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
 
     put "/source/home:Iggy:Test/_meta", "<project name='home:Iggy:Test'> <title /> <description /> </project>"
     assert_response :success
@@ -2105,7 +2119,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   # bugreport bnc #833616
   def test_permission_check_for_package_only_permissions
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
 
     # validate setup for this check
     get "/source/home:Iggy/_meta"
@@ -2129,12 +2143,12 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     id = node.value('id')
 
     # decline as fred
-    prepare_request_with_user "fred", "geröllheimer"
+    login_fred
     post "/request/#{id}?cmd=changestate&newstate=declined"
     assert_response :success
 
     # create request for project, where fred has no permissions
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request?cmd=create", '<request>
                                    <action type="add_role">
                                      <target project="home:Iggy" />
@@ -2148,13 +2162,13 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     id = node.value('id')
 
     # decline as fred
-    prepare_request_with_user "fred", "geröllheimer"
+    login_fred
     post "/request/#{id}?cmd=changestate&newstate=declined"
     assert_response 403
   end
 
   def test_invalid_names
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
 
     req = "<request>
             <action type='submit'>
@@ -2182,7 +2196,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_invalid_cleanup_use
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
 
     req = "<request>
             <action type='submit'>
@@ -2200,7 +2214,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_special_chars
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     # create request
     req = "<request>
             <action type='submit'>
@@ -2238,7 +2252,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   def test_project_delete_request_with_pending
     # try to replay rq 74774
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     meta="<project name='home:Iggy:todo'><title></title><description/><repository name='base'>
       <path repository='BaseDistroUpdateProject_repo' project='BaseDistro:Update'/>
         <arch>i586</arch>
@@ -2253,7 +2267,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     put url_for(:controller => :source, :action => :package_meta, :project => "home:Iggy:todo", :package => "realfun"), meta
     assert_response :success
 
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     post "/source/home:Iggy:todo/realfun", :cmd => "branch"
     assert_response :success
 
@@ -2276,20 +2290,20 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert node.has_attribute?(:id)
     iddelete = node.value('id')
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request/#{iddelete}?cmd=changestate&newstate=accepted"
     assert_response :success
 
     # cleanup
     delete "/source/home:Iggy:todo"
     assert_response 404 # already removed
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     delete "/source/home:tom:branches:home:Iggy:todo"
     assert_response :success
   end
 
   def test_try_to_modify_virtual_package
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
 
     get "/source/BaseDistro:Update/pack1/_meta"
     assert_response :success
@@ -2313,7 +2327,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_repository_delete_request
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     meta="<project name='home:Iggy:todo'><title></title><description/><repository name='base'>
       <path repository='BaseDistroUpdateProject_repo' project='BaseDistro:Update'/>
         <arch>i586</arch>
@@ -2328,7 +2342,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     put url_for(:controller => :source, :action => :package_meta, :project => "home:Iggy:todo", :package => "realfun"), meta
     assert_response :success
 
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     post "/source/home:Iggy:todo/realfun", :cmd => "branch"
     assert_response :success
 
@@ -2355,7 +2369,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert node.has_attribute?(:id)
     iddelete2 = node.value('id')
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request/#{iddelete}?cmd=changestate&newstate=accepted"
     assert_response :success
 
@@ -2369,7 +2383,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
                    :tag => 'path', :attributes => {:project => "deleted", :repository => "deleted"}
 
     # try again and fail
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/request/#{iddelete2}?cmd=changestate&newstate=accepted"
     assert_response 400
     assert_xml_tag(:tag => "status", :attributes => {:code => 'repository_missing'})
@@ -2377,14 +2391,14 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     # cleanup
     delete "/source/home:Iggy:todo"
     assert_response :success
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     delete "/source/home:tom:branches:home:Iggy:todo"
     assert_response :success
   end
 
  test "delete_request_id" do
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     req = load_backend_file('request/1')
     post "/request?cmd=create", req
     assert_response :success
@@ -2399,7 +2413,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     assert_response 403
     assert_xml_tag :tag => 'summary', :content => "Requires admin privileges"
 
-    prepare_request_with_user "king", "sunflower"
+    login_king
     delete "/request/#{id}"
     assert_response :success
 
@@ -2410,7 +2424,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   test "reopen declined request" do
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     req = load_backend_file('request/add_role')
     post "/request?cmd=create", req
     assert_response :success
@@ -2420,7 +2434,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
     get "/request/#{id}"
     assert_response :success
 
-    prepare_request_with_user "fred", "geröllheimer"
+    login_fred
     post "/request/#{id}?cmd=changestate&newstate=declined&comment=not+you"
     get "/request/#{id}"
     assert_xml_tag(:tag => "state", :attributes => {:name => 'declined'})
@@ -2434,7 +2448,7 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   # it was reported that requests can't be revoked - test cases verifie sthat
   test "revoke autodeclined submit requests" do
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
 
     Timecop.freeze(2010, 12, 07)
     raw_put "/source/home:Iggy:fordecline/_meta", "<project name='home:Iggy:fordecline'><title></title><description></description></project>"
@@ -2484,4 +2498,15 @@ class RequestControllerTest < ActionDispatch::IntegrationTest
 
   end
 
+  test "check target maintainer" do
+    login_tom
+    raw_post '/request?cmd=create', "<request><action type='submit'><source project='Apache' package='apache2'/><target project='kde4' package='apache2'/></action></request>"
+    assert_response :success
+    id = Xmlhash.parse(@response.body)['id']
+
+    get "/webui/requests/#{id}"
+    assert_response :success
+    ret = Yajl::Parser.parse(@response.body)
+    assert !ret['is_target_maintainer'], "tom is target maintainer"
+  end
 end

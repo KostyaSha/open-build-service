@@ -5,12 +5,16 @@ class ReleaseManagementTests < ActionDispatch::IntegrationTest
   fixtures :all
   
   def test_release_project
-    prepare_request_with_user "tom", "thunder"
+    login_tom
 
-    # inject a job for copy any entire project ... gets not executed in test suite
+    # inject a job for copy any entire project ... gets copied in testsuite but appears to be delayed
     post "/source/home:tom:BaseDistro", :cmd => :copy, :oproject => "BaseDistro"
     assert_response :success
     assert_xml_tag( :tag => "status", :attributes => { :code => "invoked"} )
+
+    # cleanup
+    delete "/source/home:tom:BaseDistro"
+    assert_response :success
 
     # copy any entire project NOW
     post "/source/home:tom:BaseDistro", :cmd => :copy, :oproject => "BaseDistro", :nodelay => 1
@@ -38,7 +42,7 @@ class ReleaseManagementTests < ActionDispatch::IntegrationTest
     assert_not_equal vrevs.count, 0
 
     # make a full split as admin
-    prepare_request_with_user "king", "sunflower"
+    login_king
     post "/source/TEST:BaseDistro", :cmd => :copy, :oproject => "BaseDistro", :makeolder => 1, :nodelay => 1
     assert_response :success
 

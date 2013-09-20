@@ -2,8 +2,7 @@ require 'base64'
 
 class RequestController < ApplicationController
   include ApplicationHelper
-  include CommentsHelper
-  before_filter :require_login, :only => [:save_comments]
+  before_filter :require_login, :only => [:save_comment]
 
   def add_reviewer_dialog
     @request_id = params[:id]
@@ -65,14 +64,15 @@ class RequestController < ApplicationController
 
     @id = @req['id']
     @state = @req['state']
-    @is_author = @req["creator"] == session[:login]
-    @superseded_by = @req["superseded_by"]
+    @accept_at = @req['accept_at']
+    @is_author = @req['creator'] == session[:login]
+    @superseded_by = @req['superseded_by']
     @is_target_maintainer = @req['is_target_maintainer']
 
     @my_open_reviews = @req['my_open_reviews']
     @other_open_reviews = @req['other_open_reviews']
-    @can_add_reviews = ['new', 'review'].include?(@state) && (@is_author || @is_target_maintainer || @my_open_reviews.length > 0) && session[:login]
-    @can_handle_request = ['new', 'review', 'declined'].include?(@state) && (@is_target_maintainer || @is_author) && session[:login]
+    @can_add_reviews = ['new', 'review'].include?(@state) && (@is_author || @is_target_maintainer || @my_open_reviews.length > 0) && !@user.nil?
+    @can_handle_request = ['new', 'review', 'declined'].include?(@state) && (@is_target_maintainer || @is_author) && !@user.nil?
 
     @events = @req['events']
     @actions = @req['actions']
@@ -88,6 +88,13 @@ class RequestController < ApplicationController
       # will be nul for after end
       @request_after = request_list[index+1]
     end
+  
+    begin
+      @comments = ApiDetails.read(:comments_by_request, @req['id'])
+    rescue ActiveXML::Transport::Error => e
+      render :text => e.summary, :status => 404, :content_type => "text/plain"
+    end
+
   end
 
   def sourcediff
@@ -112,11 +119,12 @@ class RequestController < ApplicationController
     end
 
     if change_request(changestate, params)
-      if params[:add_submitter_as_maintainer]
+      # TODO: Make this work for each submit action individually
+      if params[:add_submitter_as_maintainer_0]
         if changestate != 'accepted'
           flash[:error] = "Will not add maintainer for not accepted requests"
         else
-          tprj, tpkg = params[:add_submitter_as_maintainer].split('_#_') # split into project and package
+          tprj, tpkg = params[:add_submitter_as_maintainer_0].split('_#_') # split into project and package
           if tpkg
             target = find_cached(Package, tpkg, :project => tprj)
           else
@@ -182,7 +190,7 @@ class RequestController < ApplicationController
   def list_small
     redirect_to :controller => :home, :action => :requests and return unless request.xhr?  # non ajax request
     requests = BsRequest.list(params)
-    render :partial => "shared/requests_small", :locals => {:requests => requests}
+    render :partial => 'shared/requests_small', :locals => {:requests => requests}
   end
 
   def delete_request_dialog
@@ -194,15 +202,15 @@ class RequestController < ApplicationController
   def delete_request
     required_parameters :project, :package
     begin
-      req = BsRequest.new(:type => "delete", :targetproject => params[:project], :targetpackage => params[:package], :description => params[:description])
+      req = BsRequest.new(:type => 'delete', :targetproject => params[:project], :targetpackage => params[:package], :description => params[:description])
       req.save(:create => true)
-      Rails.cache.delete "requests_new"
+      Rails.cache.delete 'requests_new'
     rescue ActiveXML::Transport::Error => e
       flash[:error] = e.summary
       redirect_to :controller => :package, :action => :show, :package => params[:package], :project => params[:project] and return if params[:package]
       redirect_to :controller => :project, :action => :show, :project => params[:project] and return
     end
-    redirect_to :controller => :request, :action => :show, :id => req.value("id")
+    redirect_to :controller => :request, :action => :show, :id => req.value('id')
   end
 
   def add_role_request_dialog
@@ -214,15 +222,15 @@ class RequestController < ApplicationController
   def add_role_request
     required_parameters :project, :role, :user
     begin
-      req = BsRequest.new(:type => "add_role", :targetproject => params[:project], :targetpackage => params[:package], :role => params[:role], :person => params[:user], :description => params[:description])
+      req = BsRequest.new(:type => 'add_role', :targetproject => params[:project], :targetpackage => params[:package], :role => params[:role], :person => params[:user], :description => params[:description])
       req.save(:create => true)
-      Rails.cache.delete "requests_new"
+      Rails.cache.delete 'requests_new'
     rescue ActiveXML::Transport::NotFoundError => e
       flash[:error] = e.summary
       redirect_to :controller => :package, :action => :show, :package => params[:package], :project => params[:project] and return if params[:package]
       redirect_to :controller => :project, :action => :show, :project => params[:project] and return
     end
-    redirect_to :controller => :request, :action => :show, :id => req.value("id")
+    redirect_to :controller => :request, :action => :show, :id => req.value('id')
   end
 
   def set_bugowner_request_dialog
@@ -232,16 +240,16 @@ class RequestController < ApplicationController
   def set_bugowner_request
     required_parameters :project, :user, :group
     begin
-      if params[:group] == "False"
-        req = BsRequest.new(:type => "set_bugowner", :targetproject => params[:project], :targetpackage => params[:package],
+      if params[:group] == 'False'
+        req = BsRequest.new(:type => 'set_bugowner', :targetproject => params[:project], :targetpackage => params[:package],
                             :person => params[:user], :description => params[:description])
       end
-      if params[:user] == "False"
-        req = BsRequest.new(:type => "set_bugowner", :targetproject => params[:project], :targetpackage => params[:package],
+      if params[:user] == 'False'
+        req = BsRequest.new(:type => 'set_bugowner', :targetproject => params[:project], :targetpackage => params[:package],
                             :group => params[:group], :description => params[:description])
       end
       req.save(:create => true)
-      Rails.cache.delete "requests_new"
+      Rails.cache.delete 'requests_new'
     rescue ActiveXML::Transport::NotFoundError => e
       flash[:error] = e.summary
       redirect_to :controller => :package, :action => :show, :package => params[:package], :project => params[:project] and return if params[:package]
@@ -288,32 +296,38 @@ class RequestController < ApplicationController
     redirect_to :controller => :request, :action => "show", :id => params[:id]
   end
 
-
-  def comments
-    unless params[:reply] == 'true'
-      @comment = ApiDetails.read(:comments_by_request, params[:id])
-      @comments_as_thread = sort_comments(@comment)
-    else
-      render_dialog
-    end
-  end
-
-  def save_comments
+  def save_comment
+    required_parameters :id, :body
+    required_parameters :title if !params[:parent_id]
     begin
-      params[:request_id] = params[:id]
-      ApiDetails.save_comments(:save_comments_for_requests, params)
+      ApiDetails.save_comment(:save_request_comment, params)
 
       respond_to do |format|
         format.js { render json: 'ok' }
         format.html do
-          flash[:notice] = "Comment added successfully"
-          redirect_to action: :comments
+          flash[:notice] = "Comment added successfully"          
         end
       end
     rescue ActiveXML::Transport::Error => e
-      flash[:error] = e.summary
-      redirect_to(:action => "comments", :id => params[:id]) and return
+      flash[:error] = e.summary      
     end
+    redirect_to(:action => "show", :id => params[:id]) and return
+  end
+
+  def delete_comment
+    required_parameters :id, :comment_id
+    begin
+      ApiDetails.save_comment(:delete_request_comment, params)
+      respond_to do |format|
+        format.js { render json: 'ok' }
+        format.html do
+          flash[:notice] = "Comment deleted successfully"          
+        end
+      end
+    rescue ActiveXML::Transport::Error => e
+      flash[:error] = e.summary      
+    end
+    redirect_to(:action => "show", :id => params[:id]) and return
   end
 
 private
@@ -321,7 +335,8 @@ private
   def change_request(changestate, params)
     begin
       if BsRequest.modify( params[:id], changestate, :reason => params[:reason], :force => true )
-        flash[:notice] = "Request #{changestate}!" and return true
+        flash[:notice] = "Request #{changestate}!"
+        return true
       else
         flash[:error] = "Can't change request to #{changestate}!"
       end

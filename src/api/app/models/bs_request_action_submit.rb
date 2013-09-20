@@ -1,10 +1,12 @@
 class BsRequestActionSubmit < BsRequestAction
 
+  include SubmitRequestSourceDiff
+
   def self.sti_name
     return :submit
   end
 
-  def execute_changestate(opts)
+  def execute_accept(opts)
 
     # use the request description as comments for history
     source_history_comment = self.bs_request.description

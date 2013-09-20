@@ -5,7 +5,7 @@ class ProductTests < ActionDispatch::IntegrationTest
   fixtures :all
   
   def test_simple_product_file
-    prepare_request_with_user "tom", "thunder"
+    login_tom
     put "/source/home:tom:temporary/_meta",
         '<project name="home:tom:temporary"> <title/> <description/> 
            <repository name="me" />
@@ -23,8 +23,12 @@ class ProductTests < ActionDispatch::IntegrationTest
       assert_response :success
     end
 
-    get "/source/home:tom:temporary"
+    get "/source/home:tom:temporary/_product?view=issues"
     assert_response :success
+    assert_xml_tag :tag => "kind", :content => "product"
+    get "/source/home:tom:temporary/_product?view=products"
+    assert_response :success
+    assert_xml_tag :tag => "product", :attributes => { :id => 'simple' }
 
     get "/source/home:tom:temporary/_product:simple-SP3-migration/simple-SP3-migration.spec"
     assert_response :success

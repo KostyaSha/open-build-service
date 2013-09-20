@@ -189,6 +189,13 @@ class ApplicationController < ActionController::Base
     end
   end
 
+  # useful together with ApiDetails
+  def pick_params(*keys)
+    ret = {}
+    keys.each { |k| ret[k] = params[k] unless params[k].blank? }
+    ret
+  end
+
   def discard_cache?
     cc = request.headers['HTTP_CACHE_CONTROL']
     return false if cc.blank?
@@ -318,6 +325,7 @@ class ApplicationController < ActionController::Base
 
     unless document
       self.instance_variable_set(:@_response_body, nil)
+      logger.debug "XML Errors #{errors.inspect} #{xmlbody}"
       render :template => "xml_errors", :locals => { :oldbody => xmlbody, :errors => errors }, :status => 400
     end
   end
@@ -382,8 +390,8 @@ class ApplicationController < ActionController::Base
   def require_available_architectures
     @available_architectures = Architecture.find_cached(:available)
     unless @available_architectures
-      flash[:error] = "Available architectures not found"
-      redirect_to :controller => "project", :action => "list_public", :nextstatus => 404 and return
+      flash[:error] = 'Available architectures not found'
+      redirect_to :controller => 'project', :action => 'list_public', :nextstatus => 404 and return
     end
   end
 

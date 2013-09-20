@@ -73,10 +73,10 @@
     <% end %>
   </div>
 
-  <% if (not @bugowners_mail.empty? and !CONFIG['bugzilla_host'].nil?) or @user %>
+  <% if (not @bugowners_mail.empty? and @configuration['bugzilla_url']) or @user %>
     <div class="grid_16 alpha omega">
       <ul class="horizontal-list">
-        <% unless @bugowners_mail.empty? or CONFIG['bugzilla_host'].nil? %>
+        <% unless @bugowners_mail.empty? or @configuration['bugzilla_url']%>
           <li>
             <%= link_to image_tag('tools-report-bug.png', :title => 'Report Bug'), bugzilla_url(@bugowners_mail, "#{@project.name}/#{@package.name}: Bug") %>
             <%= link_to 'Report Bug', bugzilla_url(@bugowners_mail, "#{@project.name}/#{@package.name}: Bug") %>
@@ -148,3 +148,7 @@
   <%= render :partial => 'shared/buildresult_box', :locals => {:project => @project.value('name'), :package => @package.value('name')} %>
 </div>
 
+<div class="grid_16 box box-shadow alpha omega">
+  <h2 class="box-header">Comments for <%= @project.name %> (<%= @comments.length %>)</h2>
+  <%= render :partial => "comment/show"%>
+</div>

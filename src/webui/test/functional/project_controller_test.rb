@@ -26,7 +26,7 @@ class ProjectControllerTest < ActionDispatch::IntegrationTest
   test "adrian can edit kde4" do
     login_adrian
     # adrian is maintainer via group on kde4 
-    visit "/project/show?project=kde4"
+    visit "/project/show/kde4"
     # really simple test to get started
     page.must_have_link 'delete-project'
     page.must_have_link 'edit-description'
@@ -59,7 +59,7 @@ class ProjectControllerTest < ActionDispatch::IntegrationTest
     find(:link, "Meta").click
     
     # TODO: find a more reliable way to retrieve the text - having the line numbers in here sounds dangerous
-    find(:css, "div.CodeMirror-lines").must_have_text %r{<access> 7 <disable/> 8 </access>}
+    find(:css, "div.CodeMirror-lines").must_have_text %r{<access> 6 <disable/> 7 </access>}
 
     # now check that adrian can't see it
     logout
@@ -239,11 +239,31 @@ class ProjectControllerTest < ActionDispatch::IntegrationTest
     page.must_have_text "Include version updates" # just don't crash
   end
 
-  test "comment creation without login" do
-    logout
-    visit "/project/comments/home:adrian"
+  test "succesful comment creation" do
+    login_Iggy
+    visit "/project/show/home:Iggy"
+    fill_in "title", with: "Comment Title"
+    fill_in "body", with: "Comment Body"
     find_button("Add comment").click
-    find('#flash-messages').must_have_text "Please login to access the requested page."
+    find('#flash-messages').must_have_text "Comment added successfully "
+  end
+
+  test "another succesful comment creation" do
+    login_Iggy
+    visit "/project/show?project=home:Iggy"
+    fill_in "title", with: "Comment Title"
+    fill_in "body", with: "Comment Body"
+    find_button("Add comment").click
+    find('#flash-messages').must_have_text "Comment added successfully "
+  end
+
+  test "succesful reply comment creation" do
+     login_Iggy
+     visit "/project/show/BaseDistro"
+     find(:id,'reply_link_id_100').click
+     fill_in "reply_body_100", with: "Comment Body"
+     find(:id,'add_reply_100').click
+     find('#flash-messages').must_have_text "Comment added successfully "
   end
 
 end

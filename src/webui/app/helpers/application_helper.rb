@@ -18,7 +18,7 @@ module ActionView
       if @@icon_cache[_source]
         return @@icon_cache[_source]
       end
-      new_path = "/vendor/#{CONFIG['theme']}#{_source}"
+      new_path = "/vendor/#{@configuration['theme']}#{_source}"
       if File.exists?("#{Rails.root.to_s}/public#{new_path}")
         source = new_path
       elsif File.exists?("#{Rails.root.to_s}/public#{_source}")
@@ -72,8 +72,8 @@ module ApplicationHelper
   end
 
   def repo_url(project, repo='' )
-    if defined? CONFIG['download_url']
-      "#{CONFIG['download_url']}/" + project.to_s.gsub(/:/,':/') + "/#{repo}"
+    if @configuration['download_url']
+      "#{@configuration['download_url']}/" + project.to_s.gsub(/:/,':/') + "/#{repo}"
     else
       nil
     end
@@ -93,12 +93,12 @@ module ApplicationHelper
   end
 
   def bugzilla_url(email_list="", desc="")
-    return '' if CONFIG['bugzilla_host'].nil?
+    return '' if @configuration['bugzilla_url'].blank?
     assignee = email_list.first if email_list
     if email_list.length > 1
       cc = ("&cc=" + email_list[1..-1].join("&cc=")) if email_list
     end
-    URI.escape("#{CONFIG['bugzilla_host']}/enter_bug.cgi?classification=7340&product=openSUSE.org&component=3rd party software&assigned_to=#{assignee}#{cc}&short_desc=#{desc}")
+    URI.escape("#{@configuration['bugzilla_url']}/enter_bug.cgi?classification=7340&product=openSUSE.org&component=3rd party software&assigned_to=#{assignee}#{cc}&short_desc=#{desc}")
   end
 
   def image_url(source)
@@ -109,9 +109,9 @@ module ApplicationHelper
     abs_path
   end
 
-  def user_icon(login, size=20, css_class=nil)
+  def user_icon(login, size=20, css_class=nil, alt=login)    
     return image_tag(url_for(controller: :home, action: :icon, user: login.to_s, size: size), 
-                     width: size, height: size, class: css_class)
+                     width: size, height: size, alt: alt, class: css_class)
   end
 
   def fuzzy_time_string(time)
@@ -182,37 +182,37 @@ module ApplicationHelper
   end
 
   REPO_STATUS_ICONS = {
-    "published"            => "lorry",
-    "publishing"           => "cog_go",
-    "outdated_published"   => "lorry_error",
-    "outdated_publishing"  => "cog_error",
-    "unpublished"          => "lorry_flatbed",
-    "outdated_unpublished" => "lorry_error",
-    "building"             => "cog",
-    "outdated_building"    => "cog_error",
-    "finished"             => "time",
-    "outdated_finished"    => "time_error",
-    "blocked"              => "time",
-    "outdated_blocked"     => "time_error",
-    "broken"               => "exclamation",
-    "outdated_broken"      => "exclamation",
-    "scheduling"           => "cog",
-    "outdated_scheduling"  => "cog_error",
+    'published' => 'lorry',
+    'publishing' => 'cog_go',
+    'outdated_published' => 'lorry_error',
+    'outdated_publishing' => 'cog_error',
+    'unpublished' => 'lorry_flatbed',
+    'outdated_unpublished' => 'lorry_error',
+    'building' => 'cog',
+    'outdated_building' => 'cog_error',
+    'finished' => 'time',
+    'outdated_finished' => 'time_error',
+    'blocked' => 'time',
+    'outdated_blocked' => 'time_error',
+    'broken' => 'exclamation',
+    'outdated_broken' => 'exclamation',
+    'scheduling' => 'cog',
+    'outdated_scheduling' => 'cog_error',
   }
 
   REPO_STATUS_DESCRIPTIONS = {
-    "published"   => "Repository has been published",
-    "publishing"  => "Repository is being created right now",
-    "unpublished" => "Build finished, but repository publishing is disabled",
-    "building"    => "Build jobs exists",
-    "finished"    => "Build jobs have been processed, new repository is not yet created",
-    "blocked"     => "No build possible atm, waiting for jobs in other repositories",
-    "broken"      => "The repository setup is broken, build not possible",
-    "scheduling"  => "The repository state is being calculated right now",
+    'published' => 'Repository has been published',
+    'publishing' => 'Repository is being created right now',
+    'unpublished' => 'Build finished, but repository publishing is disabled',
+    'building' => 'Build jobs exists',
+    'finished' => 'Build jobs have been processed, new repository is not yet created',
+    'blocked' => 'No build possible atm, waiting for jobs in other repositories',
+    'broken' => 'The repository setup is broken, build not possible',
+    'scheduling' => 'The repository state is being calculated right now',
   }
 
   def repo_status_icon( status )
-    icon = REPO_STATUS_ICONS[status] || "eye"
+    icon = REPO_STATUS_ICONS[status] || 'eye'
 
     outdated = nil
     if status =~ /^outdated_/
@@ -220,8 +220,8 @@ module ApplicationHelper
       outdated = true
     end
 
-    description = REPO_STATUS_DESCRIPTIONS[status] || "Unknown state of repository"
-    description = "State needs recalculations, former state was: " + description if outdated
+    description = REPO_STATUS_DESCRIPTIONS[status] || 'Unknown state of repository'
+    description = 'State needs recalculations, former state was: ' + description if outdated
 
     sprite_tag icon, title: description
   end
@@ -392,7 +392,7 @@ module ApplicationHelper
   end
 
   def is_advanced_tab?
-    ["prjconf", "attributes", "meta", "status"].include? @current_action.to_s
+    ['prjconf', 'attributes', 'meta', 'status'].include? @current_action.to_s
   end
 
   def mobile_device?
@@ -410,7 +410,7 @@ module ApplicationHelper
       if opts[:title]
         alt = opts[:title]
       else
-        Rails.logger.warn "No alt/title text for sprite_tag"
+        Rails.logger.warn 'No alt/title text for sprite_tag'
       end
       opts[:alt] = alt
     end
@@ -461,7 +461,7 @@ module ApplicationHelper
   end
 
   def remove_dialog_tag(text)
-    link_to(text, "#", title: 'Remove Dialog', id: 'remove_dialog')
+    link_to(text, '#', title: 'Remove Dialog', id: 'remove_dialog')
   end
 
   # dialog_init is a function name called before dialog is shown

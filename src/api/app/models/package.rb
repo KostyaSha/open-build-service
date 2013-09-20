@@ -6,6 +6,8 @@ class Package < ActiveRecord::Base
   include FlagHelper
   include CanRenderModel
   include HasRelationships
+  include HasRatings
+  include HasAttributes
 
   class CycleError < APIException
    setup "cycle_error"
@@ -38,7 +40,6 @@ class Package < ActiveRecord::Base
   has_many :tags, :through => :taggings
 
   has_many :download_stats
-  has_many :ratings, :as => :db_object, dependent: :delete_all
 
   has_many :flags, -> { order(:position) }, dependent: :delete_all, foreign_key: :db_package_id
 
@@ -47,11 +48,14 @@ class Package < ActiveRecord::Base
 
   has_many :attribs, :dependent => :destroy, foreign_key: :db_package_id
 
-  has_many :package_kinds, :dependent => :destroy, foreign_key: :db_package_id
-  has_many :package_issues, :dependent => :destroy, foreign_key: :db_package_id # defined in sources
+  has_many :package_kinds, dependent: :delete_all, foreign_key: :db_package_id
+  has_many :package_issues, dependent: :delete_all, foreign_key: :db_package_id # defined in sources
 
-  has_many :comments
-  
+  has_many :products, :dependent => :destroy
+  has_many :channels, :dependent => :destroy, foreign_key: :package_id
+
+  has_many :comments, :dependent => :delete_all
+
   after_save :write_to_backend
   before_update :update_activity
   after_rollback :reset_cache
@@ -61,20 +65,45 @@ class Package < ActiveRecord::Base
   validates :name, presence: true, length: { maximum: 200 }
   validate :valid_name
 
-  has_one :linked_package, foreign_key: :package_id, dependent: :destroy
-  delegate :links_to, to: :linked_package
+  has_one :backend_package, foreign_key: :package_id, dependent: :destroy
 
   class << self
 
-    def check_dbp_access?(dbp)
-      return false unless dbp.class == Project
-      return false if dbp.nil?
-      return Project.check_access?(dbp)
-    end
     def check_access?(dbpkg=self)
       return false if dbpkg.nil?
       return false unless dbpkg.class == Package
       return Project.check_access?(dbpkg.project)
+    end
+
+    def check_cache(project, package, opts)
+      @key = { "get_by_project_and_name" => 1, package: package, opts: opts }
+
+      @key[:user] = User.current.cache_key if User.current
+
+      # the cache is only valid if the user, prj and pkg didn't change
+      if project.is_a? Project
+        @key[:project] = project.id
+      else
+        @key[:project] = project
+      end
+      pid, old_pkg_time, old_prj_time = Rails.cache.read(@key)
+      if pid
+        pkg=Package.where(id: pid).first
+        return pkg if pkg && pkg.updated_at == old_pkg_time && pkg.project.updated_at == old_prj_time
+        Rails.cache.delete(@key) # outdated anyway
+      end
+      return nil
+    end
+
+    def internal_get_project(project)
+      if project.is_a? Project
+        prj = project
+      else
+        return nil if Project.is_remote_project?( project )
+        prj = Project.get_by_name( project )
+      end
+      raise UnknownObjectError, "#{project}/#{package}" unless prj
+      prj
     end
 
     # returns an object of package or raises an exception
@@ -84,53 +113,39 @@ class Package < ActiveRecord::Base
     # function returns a nil object in case the package is on remote instance
     def get_by_project_and_name( project, package, opts = {} )
       opts = { use_source: true, follow_project_links: true }.merge(opts)
-      key = { "get_by_project_and_name" => 1, package: package }.merge(opts)
 
-      key[:user] = User.current.cache_key if User.current
-	 
-      # the cache is only valid if the user, prj and pkg didn't change
-      if project.class == Project
-        key[:project] = project.id
-      else
-        key[:project] = project
-      end
-      pid, old_pkg_time, old_prj_time = Rails.cache.read(key)
-      logger.debug "get_by_project_and_name #{key} #{pid}"
-      if pid
-        pkg=Package.where(id: pid).first
-        return pkg if pkg && pkg.updated_at == old_pkg_time && pkg.project.updated_at == old_prj_time
-        Rails.cache.delete(key) # outdated anyway
-      end
-      use_source = opts.delete :use_source
-      follow_project_links = opts.delete :follow_project_links
-      raise "get_by_project_and_name passed unknown options #{opts.inspect}" unless opts.empty?
-      if project.class == Project
-        prj = project
-      else
-        return nil if Project.is_remote_project?( project )
-        prj = Project.get_by_name( project )
-      end
-      raise UnknownObjectError, "#{project}/#{package}" unless prj
-      if follow_project_links
+      pkg = check_cache( project, package, opts )
+      return pkg if pkg
+
+      prj = internal_get_project(project)
+      return nil unless prj # remote prjs
+
+      if opts[:follow_project_links]
         pkg = prj.find_package(package)
       else
         pkg = prj.packages.find_by_name(package)
       end
-      if pkg.nil? and follow_project_links
+      if pkg.nil? and opts[:follow_project_links]
         # in case we link to a remote project we need to assume that the
         # backend may be able to find it even when we don't have the package local
         prj.expand_all_projects.each do |p|
-          return nil unless p.class == Project
+          return nil unless p.is_a? Project
         end
       end
 
-      raise UnknownObjectError, "#{project}/#{package}" if pkg.nil?
+      raise UnknownObjectError, "#{project}/#{package}" unless pkg
       raise ReadAccessError, "#{project}/#{package}" unless check_access?(pkg)
 
-      pkg.check_source_access! if use_source
+      pkg.check_source_access! if opts[:use_source]
 
-      Rails.cache.write(key, [pkg.id, pkg.updated_at, prj.updated_at])
+      Rails.cache.write(@key, [pkg.id, pkg.updated_at, prj.updated_at])
       return pkg
+    end
+
+    def get_by_project_and_name!( project, package, opts = {} )
+      pkg = get_by_project_and_name(project, package, opts)
+      raise UnknownObjectError, "#{project}/#{package}" unless pkg
+      pkg
     end
 
     # to check existens of a project (local or remote)
@@ -138,14 +153,7 @@ class Package < ActiveRecord::Base
       raise "get_by_project_and_name expects a hash as third arg" unless opts.kind_of? Hash
       opts = { follow_project_links: true, allow_remote_packages: false}.merge(opts)
       if Project.is_remote_project?( project )
-        if opts[:allow_remote_packages]
-          begin
-            answer = Suse::Backend.get("/source/#{URI.escape(project)}/#{URI.escape(package)}")
-            return true if answer
-          rescue ActiveXML::Transport::Error
-          end
-        end
-        return false
+        return opts[:allow_remote_packages] && exist_package_on_backend?(package, project)
       end
       prj = Project.get_by_name( project )
       if opts[:follow_project_links]
@@ -155,14 +163,7 @@ class Package < ActiveRecord::Base
       end
       if pkg.nil?
         # local project, but package may be in a linked remote one
-        if opts[:allow_remote_packages]
-          begin
-            answer = Suse::Backend.get("/source/#{URI.escape(project)}/#{URI.escape(package)}")
-            return true if answer
-          rescue ActiveXML::Transport::Error
-          end
-        end
-        return false
+        return opts[:allow_remote_packages] && exist_package_on_backend?(package, project)
       end
       unless check_access?(pkg)
         return false
@@ -170,23 +171,17 @@ class Package < ActiveRecord::Base
       return true
     end
 
-    def find_by_project_and_name( project, package )
-      return Package.where(name: package.to_s, projects: { name: project }).includes(:project).first
+    def exist_package_on_backend?(package, project)
+      begin
+        answer = Suse::Backend.get(Package.source_path(project, package))
+        return true if answer
+      rescue ActiveXML::Transport::Error
+      end
+      return false
     end
 
-    def find_by_project_and_kind( project, kind )
-      sql =<<-END_SQL
-      SELECT pack.*
-      FROM packages pack
-      LEFT OUTER JOIN projects pro ON pack.db_project_id = pro.id
-      LEFT OUTER JOIN package_kinds kinds ON kinds.db_package_id = pack.id
-      WHERE pro.name = ? AND kinds.kind = ?
-      END_SQL
-
-      result = Package.find_by_sql [sql, project.to_s, kind.to_s]
-      ret = result[0]
-      return nil unless Package.check_access?(ret)
-      return ret
+    def find_by_project_and_name( project, package )
+      return Package.where(name: package.to_s, projects: { name: project }).includes(:project).first
     end
 
     def find_by_attribute_type( attrib_type, package=nil )
@@ -258,9 +253,9 @@ class Package < ActiveRecord::Base
       raise ReadSourceAccessError, "#{self.project.name}/#{self.name}"
     end
   end
-  
+
   def is_locked?
-    return true if flags.find_by_flag_and_status "lock", "enable"
+    return true if flags.find_by_flag_and_status 'lock', 'enable'
     return self.project.is_locked?
   end
 
@@ -275,10 +270,10 @@ class Package < ActiveRecord::Base
   # NOTE: this is no permission check, should it be added ?
   def can_be_deleted?
     # check if other packages have me as devel package
-    msg = ""
+    msg = ''
     packs = []
     self.develpackages.each do |dpkg|
-      msg += dpkg.project.name + "/" + dpkg.name + ", "
+      msg += dpkg.project.name + '/' + dpkg.name + ', '
       packs << dpkg
     end
     unless msg.blank?
@@ -295,13 +290,13 @@ class Package < ActiveRecord::Base
   def find_linking_packages(project_local=nil)
     path = "/search/package/id?match=(linkinfo/@package=\"#{CGI.escape(self.name)}\"+and+linkinfo/@project=\"#{CGI.escape(self.project.name)}\""
     path += "+and+@project=\"#{CGI.escape(self.project.name)}\"" if project_local
-    path += ")"
+    path += ')'
     answer = Suse::Backend.post path, nil
     data = REXML::Document.new(answer.body)
     result = []
 
     data.elements.each("collection/package") do |e|
-      p = Package.find_by_project_and_name( e.attributes["project"], e.attributes["name"] )
+      p = Package.find_by_project_and_name( e.attributes['project'], e.attributes['name'] )
       if p.nil?
         logger.error "read permission or data inconsistency, backend delivered package as linked package where no database object exists: #{e.attributes["project"]} / #{e.attributes["name"]}"
       else
@@ -312,130 +307,172 @@ class Package < ActiveRecord::Base
     return result
   end
 
-  def sources_changed
-    self.set_package_kind
-    self.update_activity
+  def check_for_product
+    if name == '_product'
+      project.update_product_autopackages
+    end
   end
 
-  def add_package_kind( kinds )
-    check_write_access!
-    private_set_package_kind( kinds, nil, true )
+  before_destroy :check_for_product
+
+  def sources_changed(backend_answer = nil)
+    update_activity
+    # mark the backend infos "dirty"
+    BackendPackage.where(package_id: self.id).delete_all
+    if backend_answer
+      backend_answer = backend_answer.body if backend_answer.is_a? Net::HTTPSuccess
+      private_set_package_kind Xmlhash.parse(backend_answer)
+    end
+    check_for_product
   end
 
-  def set_package_kind( kinds = nil )
-    check_write_access!
-    private_set_package_kind( kinds )
-  end
-
-  def set_package_kind_from_commit( commit )
-    check_write_access!
-    private_set_package_kind( nil, commit )
-  end
-
-  def self.source_path(project, package, file = nil)
+  def self.source_path(project, package, file = nil, opts = {})
     path = "/source/#{URI.escape(project)}/#{URI.escape(package)}"
     path += "/#{URI.escape(file)}" unless file.blank?
+    path += '?' + opts.to_query unless opts.blank?
     path
   end
 
-  def source_path(file = nil)
-    Package.source_path(self.project.name, self.name, file)
+  def source_path(file = nil, opts = {})
+    Package.source_path(self.project.name, self.name, file, opts)
   end
 
   def source_file(file)
     Suse::Backend.get(source_path(file)).body
   end
 
-  def dir_hash
+  def dir_hash(opts = {})
     begin
-      directory = Suse::Backend.get(self.source_path).body
+      directory = Suse::Backend.get(self.source_path(nil, opts)).body
       Xmlhash.parse(directory)
     rescue ActiveXML::Transport::Error => e
-      Xmlhash::XMLHash.new error: e.summary 
+      Xmlhash::XMLHash.new error: e.summary
     end
   end
 
-  def private_set_package_kind( kinds=nil, directory=nil, _noreset=nil )
-    if kinds
-      # set to given value
-      Package.transaction do
-        self.package_kinds.destroy_all unless _noreset
-        kinds.each do |k|
-          self.package_kinds.create :kind => k
-        end
-      end
-    else
-      # none given, detect by existing UNEXPANDED sources
-      Package.transaction do
-        self.package_kinds.destroy_all unless _noreset
-        if directory
-          xml = Xmlhash.parse(directory)
-        else
-          xml = self.dir_hash
-        end
-        xml.elements("entry") do |e|
-          if e["name"] == '_patchinfo'
-            self.package_kinds.create :kind => 'patchinfo'
-          end
-          if e["name"] == '_aggregate'
-            self.package_kinds.create :kind => 'aggregate'
-          end
-          if e["name"] == '_link'
-            self.package_kinds.create :kind => 'link'
-          end
-          # further types my be product, spec, dsc, kiwi in future
-        end
-      end
-    end
+  def private_set_package_kind( dir )
+    raise ArgumentError.new 'need a xmlhash' unless dir.is_a? Xmlhash::XMLHash
+    kinds = detect_package_kinds( dir )
+    oldkinds = self.package_kinds.pluck(:kind).sort
 
-    # update issue database based on file content
-    if self.package_kinds.find_by_kind 'patchinfo'
-      xml = Patchinfo.new.read_patchinfo_xmlhash(self)
-      Project.transaction do
-        self.package_issues.destroy_all
-        xml.elements('issue') { |i|
-          issue = Issue.find_or_create_by_name_and_tracker( i['id'], i['tracker'] )
-          self.package_issues.create( :issue => issue, :change => "kept" )
-        }
+    # recreate list if changes
+    Package.transaction do
+      self.package_kinds.delete_all
+      kinds.each do |k|
+        self.package_kinds.create :kind => k
       end
-    else
-      # onlyissues gets the issues from .changes files
-      issue_change={}
-      # all 
-      begin
-        # no expand=1, so only branches are tracked
-        issues = Suse::Backend.post("/source/#{URI.escape(self.project.name)}/#{URI.escape(self.name)}?cmd=diff&orev=0&onlyissues=1&linkrev=base&view=xml", nil)
-        xml = REXML::Document.new(issues.body.to_s)
-        xml.root.elements.each('/sourcediff/issues/issue') { |i|
-          issue = Issue.find_or_create_by_name_and_tracker( i.attributes['name'], i.attributes['tracker'] )
-          issue_change[issue] = 'kept' 
-        }
-      rescue ActiveXML::Transport::Error
-      end
+    end if oldkinds != kinds.sort
 
-      # issues introduced by local changes
-      if self.package_kinds.find_by_kind 'link'
-        begin
-          issues = Suse::Backend.post("/source/#{URI.escape(self.project.name)}/#{URI.escape(self.name)}?cmd=linkdiff&linkrev=base&onlyissues=1&view=xml", nil)
-          xml = REXML::Document.new(issues.body.to_s)
-          xml.root.elements.each('/sourcediff/issues/issue') { |i|
-            issue = Issue.find_or_create_by_name_and_tracker( i.attributes['name'], i.attributes['tracker'] )
-            issue_change[issue] = i.attributes['state']
+  end
+
+  def is_of_kind? kind
+    update_if_dirty
+    self.package_kinds.where(kind: kind).exists?
+  end
+
+  def update_issue_list
+    PackageIssue.transaction do
+      if self.is_of_kind? 'patchinfo'
+        xml = Patchinfo.new.read_patchinfo_xmlhash(self)
+        Project.transaction do
+          self.package_issues.delete_all
+          xml.elements('issue') { |i|
+            issue = Issue.find_or_create_by_name_and_tracker(i['id'], i['tracker'])
+            self.package_issues.create(issue: issue, change: 'kept')
           }
-        rescue ActiveXML::Transport::Error
         end
-      end
+      else
+        # onlyissues gets the issues from .changes files
+        issue_change = find_changed_issues
 
-      # store all
-      Project.transaction do
-        self.package_issues.destroy_all
-        issue_change.each do |issue, change|
-          self.package_issues.create( :issue => issue, :change => change )
+        # store all
+        Project.transaction do
+          self.package_issues.delete_all
+          issue_change.each do |issue, change|
+            self.package_issues.create(issue: issue, change: change)
+          end
         end
       end
     end
   end
-  private :private_set_package_kind
+
+  def parse_issues_xml(query)
+    begin
+      issues = Suse::Backend.post(self.source_path(nil, query), nil)
+      xml = Xmlhash.parse(issues.body)
+      xml.get('issues').elements('issue') do |i|
+        issue = Issue.find_or_create_by_name_and_tracker(i['name'], i['tracker'])
+        yield issue, i['state']
+      end
+    rescue ActiveXML::Transport::Error => e
+      Rails.logger.debug "failed to parse issues: #{e.inspect}"
+    end
+  end
+
+  def find_changed_issues
+    issue_change={}
+    # no expand=1, so only branches are tracked
+    query = { cmd: :diff, orev: 0, onlyissues: 1, linkrev: :base, view: :xml}
+    parse_issues_xml(query) do |issue, state|
+      issue_change[issue] = 'kept'
+    end
+
+    # issues introduced by local changes
+    return issue_change unless self.is_of_kind? 'link'
+    query = { cmd: :linkdiff, onlyissues: 1, linkrev: :base, view: :xml}
+    parse_issues_xml(query) do |issue, state|
+      issue_change[issue] = state
+    end
+
+    issue_change
+  end
+
+  def update_channel_list
+    Channel.transaction do
+      self.channels.destroy_all
+      if self.is_of_kind? 'channel'
+        xml = Suse::Backend.get(self.source_path('_channel'))
+        channel = self.channels.create
+        channel.update_from_xml(xml.body.to_s)
+      end
+    end
+  end
+
+  def update_product_list
+    return unless self.is_of_kind? 'product'
+    Product.transaction do
+      begin
+        xml = Xmlhash.parse(Suse::Backend.get(self.source_path(nil, view: :products)).body)
+      rescue ActiveXML::Transport::Error
+        return # do not touch
+      end
+      self.products.destroy_all
+      xml.elements('productdefinition') do |pd|
+        pd.elements('products') do |ps|
+          ps.elements('product') do |p|
+            Product.find_or_create_by_name_and_package(p['name'], self)
+          end
+        end
+      end
+    end
+  end
+
+  def detect_package_kinds(directory)
+    raise ArgumentError.new "neh!" if  directory.has_key? 'time'
+    ret = []
+    directory.elements("entry") do |e|
+      %w{patchinfo aggregate link channel}.each do |kind|
+        if e["name"] == '_' + kind
+          ret << kind
+        end
+      end
+      if e["name"] =~ /.product$/
+        ret << 'product'
+      end
+      # further types my be spec, dsc, kiwi in future
+    end
+    ret
+  end
 
   def resolve_devel_package
     pkg = self
@@ -443,7 +480,7 @@ class Package < ActiveRecord::Base
     processed = {}
 
     if pkg == pkg.develpackage
-      raise CycleError.new "Package defines itself as devel package"
+      raise CycleError.new 'Package defines itself as devel package'
     end
     while ( pkg.develpackage or pkg.project.develproject )
       #logger.debug "resolve_devel_package #{pkg.inspect}"
@@ -500,7 +537,7 @@ class Package < ActiveRecord::Base
       self.develpackage = develpkg
     end
     #--- end devel project ---#
-    
+
     # just for cycle detection
     self.resolve_devel_package
 
@@ -511,72 +548,17 @@ class Package < ActiveRecord::Base
 
     #---begin enable / disable flags ---#
     update_all_flags(xmlhash)
-    
+
     #--- update url ---#
     self.url = xmlhash.value('url')
     #--- end update url ---#
-    
+
     save!
   end
 
-  def store_attribute_axml( attrib, binary=nil )
-
-    raise SaveError, "attribute type without a namespace " if not attrib.has_attribute? :namespace
-    raise SaveError, "attribute type without a name " if not attrib.has_attribute? :name
-
-    # check attribute type
-    if ( not atype = AttribType.find_by_namespace_and_name(attrib.namespace,attrib.name) or atype.blank? )
-      raise SaveError, "unknown attribute type '#{attrib.namespace}':'#{attrib.name}'"
-    end
-    # verify the number of allowed values
-    if atype.value_count and attrib.has_element? :value and atype.value_count != attrib.each_value.length
-      raise SaveError, "attribute '#{attrib.namespace}:#{attrib.name}' has #{attrib.each_value.length} values, but only #{atype.value_count} are allowed"
-    end
-    if atype.value_count and atype.value_count > 0 and not attrib.has_element? :value
-      raise SaveError, "attribute '#{attrib.namespace}:#{attrib.name}' requires #{atype.value_count} values, but none given"
-    end
-    if attrib.has_element? :issue and not atype.issue_list
-      raise SaveError, "attribute '#{attrib.namespace}:#{attrib.name}' has issue elements which are not allowed in this attribute"
-    end
-
-    # verify with allowed values for this attribute definition
-    unless atype.allowed_values.empty?
-      logger.debug( "Verify value with allowed" )
-      attrib.each_value.each do |value|
-        found = 0
-        atype.allowed_values.each do |allowed|
-          if allowed.value == value.text
-            found = 1
-            break
-          end
-        end
-        if found == 0
-          raise SaveError, "attribute value #{value} for '#{attrib.namespace}':'#{attrib.name} is not allowed'"
-        end
-      end
-    end
-    # update or create attribute entry
-    changed = false
-    a = find_attribute(attrib.namespace, attrib.name, binary)
-    if a.nil?
-      # create the new attribute entry
-      if binary
-        a = self.attribs.create(:attrib_type => atype, :binary => binary)
-      else
-        a = self.attribs.create(:attrib_type => atype)
-      end
-      changed = true
-    end
-    # write values
-    changed = true if a.update_from_xml(attrib)
-    return changed
-  end
-
-  def write_attributes(comment=nil)
-    login = User.current.login
-    path = "/source/#{URI.escape(self.project.name)}/#{URI.escape(self.name)}/_attribute?meta=1&user=#{CGI.escape(login)}"
-    path += "&comment=#{CGI.escape(comment)}" if comment
-    Suse::Backend.put_source( path, render_attribute_axml )
+  # for the HasAttributes mixing
+  def attribute_url
+    self.source_path("_attribute")
   end
 
   def store(opts = {})
@@ -594,23 +576,11 @@ class Package < ActiveRecord::Base
     @commit_opts ||= {}
     #--- write through to backend ---#
     if CONFIG['global_write_through']
-      path = "/source/#{self.project.name}/#{self.name}/_meta?user=#{URI.escape(User.current ? User.current.login : "_nobody_")}"
-      path += "&comment=#{CGI.escape(@commit_opts[:comment])}" unless @commit_opts[:comment].blank?
-      Suse::Backend.put_source( path, to_axml )
+      query = { user: User.current ? User.current.login : '_nobody_' }
+      query[:comment] = @commit_opts[:comment] unless @commit_opts[:comment].blank?
+      Suse::Backend.put_source( self.source_path('_meta', query), to_axml )
     end
     @commit_opts = {}
-  end
-
-  def find_attribute( namespace, name, binary=nil )
-    if binary
-      a = attribs.joins(:attrib_type => :attrib_namespace).where("attrib_types.name = ? and attrib_namespaces.name = ? AND attribs.binary = ?", name, namespace, binary).first
-    else
-      a = attribs.nobinary.joins(:attrib_type => :attrib_namespace).where("attrib_types.name = ? and attrib_namespaces.name = ?", name, namespace).first
-    end
-    if a && a.readonly? # FIXME - there must be a way with :through to get this without readonly
-      a = attribs.where(:id => a.id).first
-    end
-    return a
   end
 
   def to_axml_id
@@ -629,93 +599,6 @@ class Package < ActiveRecord::Base
         render_xml(view)
       end
     end
-  end
-
-  def render_attribute_axml(params={})
-    builder = Nokogiri::XML::Builder.new
-
-    builder.attributes() do |a|
-      done={}
-      attribs.each do |attr|
-        type_name = attr.attrib_type.attrib_namespace.name+":"+attr.attrib_type.name
-        next if params[:name] and not attr.attrib_type.name == params[:name]
-        next if params[:namespace] and not attr.attrib_type.attrib_namespace.name == params[:namespace]
-        next if params[:binary] and attr.binary != params[:binary]
-        next if params[:binary] == "" and attr.binary != ""  # switch between all and NULL binary
-        done[type_name]=1 if not attr.binary
-        p={}
-        p[:name] = attr.attrib_type.name
-        p[:namespace] = attr.attrib_type.attrib_namespace.name
-        p[:binary] = attr.binary if attr.binary
-        a.attribute(p) do |y|
-          unless attr.issues.empty?
-            attr.issues.each do |ai|
-              y.issue(:name => ai.issue.name, :tracker => ai.issue.issue_tracker.name)
-            end
-          end
-          unless attr.values.empty?
-            attr.values.each do |val|
-              y.value(val.value)
-            end
-          else
-            if params[:with_default]
-              attr.attrib_type.default_values.each do |val|
-                y.value(val.value)
-              end
-            end
-          end
-        end
-      end
-
-      # show project values as fallback ?
-      if params[:with_project]
-        project.attribs.each do |attr|
-          type_name = attr.attrib_type.attrib_namespace.name+":"+attr.attrib_type.name
-          next if done[type_name]
-          next if params[:name] and not attr.attrib_type.name == params[:name]
-          next if params[:namespace] and not attr.attrib_type.attrib_namespace.name == params[:namespace]
-          p={}
-          p[:name] = attr.attrib_type.name
-          p[:namespace] = attr.attrib_type.attrib_namespace.name
-          p[:binary] = attr.binary if attr.binary
-          a.attribute(p) do |y|
-            unless attr.values.empty?
-              attr.values.each do |val|
-                y.value(val.value)
-              end
-            else
-              if params[:with_default]
-                attr.attrib_type.default_values.each do |val|
-                  y.value(val.value)
-                end
-              end
-            end
-          end
-        end
-      end
-    end
-    return builder.doc.to_xml :indent => 2, :encoding => 'UTF-8',
-                               :save_with => Nokogiri::XML::Node::SaveOptions::NO_DECLARATION |
-                                             Nokogiri::XML::Node::SaveOptions::FORMAT
-
-  end
-
-  def rating( user_id=nil )
-    score = 0
-    self.ratings.each do |rating|
-      score += rating.score
-    end
-    count = self.ratings.length
-    score = score.to_f
-    score /= count
-    score = -1 if score.nan?
-    score = ( score * 100 ).round.to_f / 100
-    if user_rating = self.ratings.find_by_user_id( user_id )
-      user_score = user_rating.score
-    else
-      user_score = 0
-    end
-    return { :score => score, :count => count, :user_score => user_score }
   end
 
   def self.activity_algorithm
@@ -776,10 +659,35 @@ class Package < ActiveRecord::Base
     return dir.to_hash['linkinfo']
   end
 
+  def channels
+    update_if_dirty
+    super
+  end
+
+  def add_channels
+     project_name = self.project.name
+     package_name = self.name
+     dir = self.dir_hash
+     if dir
+       # link target package name is more important, since local name could be
+       # extended. for example in maintenance incident projects.
+       li = dir['linkinfo']
+       if li
+         project_name = li['project']
+         package_name = li['package']
+       end
+     end
+     parent = nil
+     ChannelBinary.find_by_project_and_package( project_name, package_name ).each do |cb|
+       parent ||= self.project.find_parent
+       cb.create_channel_package(self, parent)
+     end
+     self.project.store
+  end
+
   def developed_packages
     packages = []
-    candidates = Package.where(develpackage_id: self).all
-    logger.debug candidates.inspect
+    candidates = Package.where(develpackage_id: self).load
     candidates.each do |candidate|
       packages << candidate unless candidate.linkinfo
     end
@@ -804,184 +712,79 @@ class Package < ActiveRecord::Base
     errors.add(:name, "is illegal") unless Package.valid_name?(self.name)
   end
 
-  class NoRepositoriesFound < APIException
-    setup 404, "No repositories build against target"
+  def branch_from(origin_project, origin_package, rev=nil, missingok=nil, comment=nil)
+    myparam = { :cmd => "branch",
+                :noservice => "1",
+                :oproject => origin_project,
+                :opackage => origin_package,
+                :user => User.current.login,
+    }
+    myparam[:orev] = rev if rev and not rev.empty?
+    myparam[:missingok] = "1" if missingok
+    myparam[:comment] = comment if comment
+    path =  self.source_path + Suse::Backend.build_query_from_hash(myparam, [:cmd, :oproject, :opackage, :user, :comment, :orev, :missingok])
+    # branch sources in backend
+    Suse::Backend.post path, nil
   end
 
-  class FailedToRetrieveBuildInfo < APIException
-    setup 404
+  # just make sure the backend_package is there
+  def update_if_dirty
+    self.backend_package
   end
 
-  def buildstatus(opts)
+  def backend_package
+    bp = super
+    # if it's there, it's supposed to be fine
+    return bp if bp
+    update_backendinfo
+  end
 
-    tproj  = opts[:target_project]
-    srcmd5 = opts[:srcmd5]
+  def update_backendinfo
+    bp = build_backend_package
 
-    # check current srcmd5
-    cdir = Directory.hashed(project: self.project.name,
-                            package: self.name,
-                            expand: 1)
-    csrcmd5 = cdir['srcmd5']
-    tocheck_repos = self.project.repositories_linking_project(tproj)
-
-    raise NoRepositoriesFound.new if tocheck_repos.empty?
-
-    output = {}
-    tocheck_repos.each do |srep|
-      output[srep['name']] ||= {}
-      trepo             = []
-      archs             = []
-      srep.elements('path') do |p|
-        if p['project'] != self.project.name
-          r = Repository.find_by_project_and_repo_name(p['project'], p['repository'])
-          r.architectures.each { |a| archs << a.name.to_s }
-          trepo << [p['project'], p['repository']]
-        end
-      end
-      archs.uniq!
-      if !trepo or trepo.nil?
-        raise NoRepositoriesFound.new "Can not find repository building against target"
-      end
-
-      tpackages = Hash.new
-      vprojects = Hash.new
-      trepo.each do |p, r|
-        next if vprojects.has_key? p
-        prj = Project.find_by_name(p)
-        next unless prj # in case of remote projects
-        prj.packages.pluck(:name).each { |n| tpackages[n] = p }
-        vprojects[p] = 1
-      end
-
-      archs.each do |arch|
-        everbuilt     = false
-        eversucceeded = false
-        buildcode     = nil
-        # first we check the lastfailures. This route is fast but only has up to
-        # two results per package. If the md5sum does not match, we have to dig deeper
-        hist = Jobhistory.find_hashed(project: self.project.name,
-                                      repository: srep['name'],
-                                      package: self.name,
-                                      arch: arch,
-                                      code: 'lastfailures')
-        next if hist.nil?
-        hist.elements('jobhist') do |jh|
-          if jh['verifymd5'] == srcmd5 || jh['srcmd5'] == srcmd5
-            everbuilt = true
-          end
-        end
-
-        if !everbuilt
-          hist = Jobhistory.find_hashed(project: self.project.name,
-                                        repository: srep['name'],
-                                        package: self.name,
-                                        arch: arch,
-                                        limit: 20,
-                                        expires_in: 15.minutes)
-        end
-
-        # going through the job history to check if it built and if yes, succeeded
-        hist.elements('jobhist') do |jh|
-          next unless jh['verifymd5'] == srcmd5 || jh['srcmd5'] == srcmd5
-          everbuilt = true
-          if jh['code'] == 'succeeded' || jh['code'] == 'unchanged'
-            buildcode     ='succeeded'
-            eversucceeded = true
-            break
-          end
-        end
-        logger.debug "arch:#{arch} md5:#{srcmd5} successed:#{eversucceeded} built:#{everbuilt}"
-        missingdeps=[]
-        # if
-        if eversucceeded
-          uri = URI("/build/#{CGI.escape(self.project.name)}/#{CGI.escape(srep['name'])}/#{CGI.escape(arch)}/_builddepinfo?package=#{CGI.escape(self.name)}&view=pkgnames")
-          begin
-            buildinfo = Xmlhash.parse(ActiveXML.transport.direct_http(uri))
-          rescue ActiveXML::Transport::Error => e
-            # if there is an error, we ignore
-            raise FailedToRetrieveBuildInfo.new "Can't get buildinfo: #{e.summary}"
-          end
-
-          buildinfo["package"].elements("pkgdep") do |b|
-            unless tpackages.has_key? b
-              missingdeps << b
-            end
-          end
-
-        end
-
-        # if the package does not appear in build history, check flags
-        if !everbuilt
-          buildflag=self.find_flag_state("build", srep['name'], arch)
-          logger.debug "find_flag_state #{srep['name']} #{arch} #{buildflag}"
-          if buildflag == 'disable'
-            buildcode='disabled'
-          end
-        end
-
-        if !buildcode && srcmd5 != csrcmd5 && everbuilt
-          buildcode='failed' # has to be
-        end
-
-        unless buildcode
-          buildcode="unknown"
-          begin
-            uri         = URI("/build/#{CGI.escape(self.project.name)}/_result?package=#{CGI.escape(self.name)}&repository=#{CGI.escape(srep['name'])}&arch=#{CGI.escape(arch)}")
-            resultlist  = Xmlhash.parse(ActiveXML.transport.direct_http(uri))
-            currentcode = nil
-            resultlist.elements('result') do |r|
-              r.elements('status') { |s| currentcode = s['code'] }
-            end
-          rescue ActiveXML::Transport::Error
-            currentcode = nil
-          end
-          if ['unresolvable', 'failed', 'broken'].include?(currentcode)
-            buildcode='failed'
-          end
-          if ['building', 'scheduled', 'finished', 'signing', 'blocked'].include?(currentcode)
-            buildcode='building'
-          end
-          if currentcode == 'excluded'
-            buildcode='excluded'
-          end
-          # if it's currently succeeded but !everbuilt, it's different sources
-          if currentcode == 'succeeded'
-            if srcmd5 == csrcmd5
-              buildcode='building' # guesssing
-            else
-              buildcode='outdated'
-            end
-          end
-        end
-
-        output[srep['name']][arch] = { result: buildcode }
-        output[srep['name']][arch][:missing] = missingdeps.uniq
-      end
+    # determine the infos provided by srcsrv
+    dir = self.dir_hash(view: :info, withchangesmd5: 1, nofilename: 1)
+    bp.verifymd5 = dir['verifymd5']
+    bp.changesmd5 = dir['changesmd5']
+    bp.expandedmd5 = dir['srcmd5']
+    if dir['revtime'].blank? # no commit, no revtime
+      bp.maxmtime = nil
+    else
+      bp.maxmtime = Time.at(Integer(dir['revtime']))
     end
 
-    output
+    # now check the unexpanded sources
+    update_backendinfo_unexpanded(bp)
+
+    # track defined products in _product containers
+    update_product_list
+
+    # update channel information
+    update_channel_list
+
+    # update issue database based on file content
+    update_issue_list
+
+    bp.save
+    bp
   end
 
-  def update_linkinfo
-     dir = self.dir_hash
-     # we will later delete all links not touched, so just go to return here
-     return if dir.blank?
-     li = dir['linkinfo']
-     if !li
-        self.linked_package.delete if self.linked_package
-        return
-     end
-     Rails.logger.debug "Syncing link #{self.project.name}/#{self.name} -> #{li['project']}/#{li['package']}"
-     # we have to be careful - the link target can be nowhere
-     link = Package.find_by_project_and_name(li['project'], li['package'])
-     unless link
-       self.linked_package.delete if self.linked_package
-       return
-     end
+  def update_backendinfo_unexpanded(bp)
+    dir = self.dir_hash
+    private_set_package_kind(dir)
 
-     self.linked_package ||= LinkedPackage.new(links_to: link)
-     self.linked_package.save # update updated_at
+    bp.srcmd5 = dir['srcmd5']
+    li = dir['linkinfo']
+    if li
+      bp.error = li['error']
 
+      Rails.logger.debug "Syncing link #{self.project.name}/#{self.name} -> #{li['project']}/#{li['package']}"
+      # we have to be careful - the link target can be nowhere
+      bp.links_to = Package.find_by_project_and_name(li['project'], li['package'])
+    else
+      bp.error = nil
+      bp.links_to = nil
+    end
   end
 
   # FIXME: we REALLY should use active_model_serializers

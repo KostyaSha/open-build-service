@@ -10,7 +10,9 @@ OBSApi::Application.routes.draw do
              :repository => %r{[^\/]*}, :filename => %r{[^\/]*}, :arch => %r{[^\/]*}, :id => %r{\d*} }
 
     ### /person
-    match 'person' => 'person#index', via: [:get, :post]
+    post 'person' => 'person#command'
+    get 'person' => 'person#show'
+
     # FIXME3.0: this is no clean namespace, a person "register" or "changepasswd" could exist ...
     #           remove these for OBS 3.0
     match 'person/register' => 'person#register', via: [:post, :put]      # use /person?cmd=register POST instead
@@ -192,8 +194,10 @@ OBSApi::Application.routes.draw do
       # --------------------------
       get 'status_message' => 'status#messages'
       
-      match 'status/messages' => :messages, via: [:get, :put]
-      match 'status/messages/:id' => :messages, :constraints => cons, via: [:get, :delete]
+      get 'status/messages' => :list_messages
+      put 'status/messages' => :update_messages
+      get 'status/messages/:id' => :show_message, constraints: cons
+      delete 'status/messages/:id' => :delete_message, constraints: cons
       get 'status/workerstatus' => :workerstatus
       get 'status/history'  => :history
       get 'status/project/:project' => :project, :constraints => cons
@@ -331,6 +335,9 @@ OBSApi::Application.routes.draw do
             end
           end
           resources :flags, :only => [:index]
+          member do
+            get "rdiff"
+          end
         end
       end
       resources :packages, :only => [], :constraints => { :id => %r{[^\/]*} } do
@@ -354,6 +361,10 @@ OBSApi::Application.routes.draw do
       post 'comments/project/:project/new' => 'comments#projects_new', constraints: cons
       post 'comments/package/:project/:package/new' => 'comments#packages_new', constraints: cons
       post 'comments/request/:id/new' => 'comments#requests_new', constraints: cons
+
+      post 'comments/project/:project/delete' => 'comments#delete', constraints: cons
+      post 'comments/package/:project/:package/delete' => 'comments#delete', constraints: cons
+      post 'comments/request/:id/delete' => 'comments#delete', constraints: cons
 
     end
 

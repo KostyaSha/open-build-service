@@ -68,6 +68,28 @@ my @binsufs = qw{rpm deb pkg.tar.gz pkg.tar.xz};
 my $binsufsre = join('|', map {"\Q$_\E"} @binsufs);
 my @binsufsrsync = map {"--include=*.$_"} @binsufs;
 
+sub notify {
+  my ($type, $p) = @_;
+  # strip
+  $p = { map {$_ => $p->{$_}} grep {defined($p->{$_}) && !ref($p->{$_})} sort keys %{$p || {}} };
+  if (0) {
+    BSNotify::notify($type, $p);
+  } else {
+    # always route over to the src server
+    my $param = {
+      'uri' => "$BSConfig::srcserver/notify/$type",
+      'request' => 'POST',
+      'headers' => [ 'Content-Type: application/x-www-form-urlencoded' ],
+      'timeout' => 60,
+    };
+    my @args = map {"$_=$p->{$_}"} sort keys %$p;
+    eval {
+      BSRPC::rpc($param, undef, @args);
+    };
+    warn($@) if $@;
+  }
+}
+
 sub qsystem {
   my @args = @_;
   my $pid;
@@ -334,8 +356,18 @@ sub createrepo_rpmmd {
   push @createrepoargs, '--changelog-limit', '20';
   push @createrepoargs, '--repo', $repotag;
   my @legacyargs;
-  push @legacyargs, '--simple-md-filenames', '--checksum=sha' if $options{'legacy'};
+  if ($options{'legacy'}) {
+    push @legacyargs, '--simple-md-filenames', '--checksum=sha';
+  } else {
+    # the default in newer createrepos
+    push @legacyargs, '--unique-md-filenames', '--checksum=sha256';
+  }
   my @updateargs;
+  # createrepo 0.9.9 defaults to usually not used sqlite database. 
+  # We do disable it since it is time and space consuming.
+  # doing this via @updateargs for the case that an old createrepo is installed which does not support
+  # this switch.
+  push @updateargs, '--no-database';
   if (-f "$extrep/repodata/repomd.xml") {
     push @updateargs, '--update';
   }
@@ -539,7 +571,9 @@ sub createrepo_debian {
 
 
   print "    running dpkg-scanpackages\n";
-  qsystem('chdir', $extrep, 'stdout', 'Packages.new', 'dpkg-scanpackages', '-m', '.', '/dev/null') && print "    dpkg-scanpackages failed: $?\n";
+  if (qsystem('chdir', $extrep, 'stdout', 'Packages.new', 'dpkg-scanpackages', '-m', '.', '/dev/null')) {
+      die("    dpkg-scansources failed: $?\n");
+  }
   if (-f "$extrep/Packages.new") {
     link("$extrep/Packages.new", "$extrep/Packages");
     qsystem('gzip', '-9', '-f', "$extrep/Packages") && print "    gzip Packages failed: $?\n";
@@ -548,7 +582,9 @@ sub createrepo_debian {
   }    
 
   print "    running dpkg-scansources\n";
-  qsystem('chdir', $extrep, 'stdout', 'Sources.new', 'dpkg-scansources', '.', '/dev/null') && print "    dpkg-scansources failed: $?\n";
+  if (qsystem('chdir', $extrep, 'stdout', 'Sources.new', 'dpkg-scansources', '.', '/dev/null')) {
+      die("    dpkg-scansources failed: $?\n");
+  }
   if (-f "$extrep/Sources.new") {
     link("$extrep/Sources.new", "$extrep/Sources");
     qsystem('gzip', '-9', '-f', "$extrep/Sources") && print "    gzip Sources failed: $?\n";
@@ -636,10 +672,10 @@ sub createrepo_arch {
     print "    running bs_mkarchrepo $arch\n";
     qsystem("$INC[0]/bs_mkarchrepo", $rname, "$extrep/$arch") && die("    repo creation failed: $?\n");
     if (-e "$extrep/$arch/$rname.db.tar.gz") {
-      symlink("$rname.db.tar.gz", "$extrep/$arch/$rname.db");
+      link("$extrep/$arch/$rname.db.tar.gz", "$extrep/$arch/$rname.db");
     }
     if (-e "$extrep/$arch/$rname.files.tar.gz") {
-      symlink("$rname.files.tar.gz", "$extrep/$arch/$rname.files");
+      link("$extrep/$arch/$rname.files.tar.gz", "$extrep/$arch/$rname.files");
     }
     if ($BSConfig::sign) {
       my @signargs;
@@ -647,11 +683,11 @@ sub createrepo_arch {
       push @signargs, @$signargs;
       if (-e "$extrep/$arch/$rname.db.tar.gz") {
         qsystem($BSConfig::sign, @signargs, '-D', "$extrep/$arch/$rname.db.tar.gz") && die("    sign failed: $?\n");
-        symlink("$rname.db.tar.gz.sig", "$extrep/$arch/$rname.db.sig");
+        link("$extrep/$arch/$rname.db.tar.gz.sig", "$extrep/$arch/$rname.db.sig");
       }
       if (-e "$extrep/$arch/$rname.files.tar.gz") {
         qsystem($BSConfig::sign, @signargs, '-D', "$extrep/$arch/$rname.files.tar.gz") && die("    sign failed: $?\n");
-        symlink("$rname.files.tar.gz.sig", "$extrep/$arch/$rname.files.sig");
+        link("$extrep/$arch/$rname.files.tar.gz.sig", "$extrep/$arch/$rname.files.sig");
       }
     }
   }
@@ -1676,7 +1712,7 @@ publishprog_done:
   }
 
   
-  BSNotify::notify("REPO_PUBLISHED", { project => $projid , 'repo' => $repoid });
+  notify('REPO_PUBLISHED', { project => $projid , 'repo' => $repoid });
   # all done. till next time...
   if ($BSConfig::publishprogram && $BSConfig::publishprogram->{$prp}) {
     exit(0);
@@ -1726,6 +1762,10 @@ while(1) {
     last if -e "$rundir/bs_publish.exit";
     last if -e "$rundir/bs_publish.restart";
     my $ev = readxml("$myeventdir/$event", $BSXML::event, 1);
+    if ($ev && $ev->{'type'} eq 'configuration') {
+      print "updating configuration\n";
+      BSConfiguration::update_from_configuration();
+    }
     if (!$ev || !$ev->{'type'} || $ev->{'type'} ne 'publish') {
       unlink("$myeventdir/$event");
       next;
@@ -1756,7 +1796,7 @@ while(1) {
 	next;
       }
     rename("$myeventdir/$event", "$myeventdir/${event}::inprogress");
-    BSNotify::notify('REPO_PUBLISH_STATE', { 'project' => $ev->{'project'}, 'repo' => $ev->{'repository'}, 'state' => 'publishing'} );
+    notify('REPO_PUBLISH_STATE', { 'project' => $ev->{'project'}, 'repo' => $ev->{'repository'}, 'state' => 'publishing'} );
     eval {
       publish($ev->{'project'}, $ev->{'repository'});
     };
@@ -1779,7 +1819,7 @@ while(1) {
       my $now = time();
       $publish_lasttime{$prp} = $now;
       $publish_duration{$prp} = $now - $starttime;
-      BSNotify::notify('REPO_PUBLISH_STATE', { 'project' => $ev->{'project'}, 'repo' => $ev->{'repository'}, 'state' => 'published'} );
+      notify('REPO_PUBLISH_STATE', { 'project' => $ev->{'project'}, 'repo' => $ev->{'repository'}, 'state' => 'published'} );
       db_sync();
       unlink("$myeventdir/${event}::inprogress");
     }

@@ -23,15 +23,15 @@ class GroupRequestTest < ActionDispatch::IntegrationTest
   end
 
   def test_set_and_get
-    prepare_request_with_user "king", "sunflower"
+    login_king
     # make sure there is at least one
     id = upload_request("group")
     get "/request/#{id}"
     assert_response :success
 
-    # 998 is new, so the group is new too
+    # 2 is new, so the group is new too
     assert_equal({"id" => id,
-                  "action" => {"type" => "group", "grouped" => {"id" => "998"}},
+                  "action" => {"type" => "group", "grouped" => {"id" => "2"}},
                   "state" =>
                       {"name" => "new", "who" => "king", "when" => "2010-07-12T00:00:00", "comment" => {}},
                   "description" => {}
@@ -57,7 +57,7 @@ class GroupRequestTest < ActionDispatch::IntegrationTest
 
     # state didn't change, only history
     assert_equal({"id" => id,
-                  "action" => {"type" => "group", "grouped" => [{"id" => "998"}, {"id" => adi}]},
+                  "action" => {"type" => "group", "grouped" => [{"id" => "2"}, {"id" => adi}]},
                   "state" =>
                       {"name" => "new", "who" => "king", "when" => "2010-07-12T00:00:00", "comment" => {}},
                   "description" => {}
@@ -73,7 +73,7 @@ class GroupRequestTest < ActionDispatch::IntegrationTest
 
     # state changed to review
     assert_equal({"id" => id,
-                  "action" => {"type" => "group", "grouped" => [{"id" => "998"}, {"id" => adi}, {"id" => withr}]},
+                  "action" => {"type" => "group", "grouped" => [{"id" => "2"}, {"id" => adi}, {"id" => withr}]},
                   "state" =>
                       {"name" => "review", "who" => "king", "when" => "2010-07-12T00:00:02", "comment" => {}},
                   "description" => {}
@@ -118,7 +118,7 @@ class GroupRequestTest < ActionDispatch::IntegrationTest
   end
 
   test "remove request" do
-    prepare_request_with_user "king", "sunflower"
+    login_king
     id = upload_request("group")
 
     # now one in review
@@ -140,7 +140,7 @@ class GroupRequestTest < ActionDispatch::IntegrationTest
   end
 
   test "accept reviews in group" do
-    prepare_request_with_user "king", "sunflower"
+    login_king
     id = upload_request("group")
 
     # now one in review
@@ -185,7 +185,7 @@ class GroupRequestTest < ActionDispatch::IntegrationTest
   end
 
   test "supersede replaces request" do
-    prepare_request_with_user "king", "sunflower"
+    login_king
     id = upload_request("group")
 
     withr = upload_request("submit_with_review")
@@ -195,7 +195,7 @@ class GroupRequestTest < ActionDispatch::IntegrationTest
     get "/request/#{id}"
     assert_response :success
     assert_equal({"id" => id,
-                  "action"=>{"type"=>"group", "grouped"=>[{"id"=>"998"}, {"id"=>withr}]},
+                  "action"=>{"type"=>"group", "grouped"=>[{"id"=>"2"}, {"id"=>withr}]},
                   "state"=>
                       {"name"=>"review",
                        "who"=>"king",
@@ -214,7 +214,7 @@ class GroupRequestTest < ActionDispatch::IntegrationTest
     get "/request/#{id}"
     assert_response :success
     assert_equal({"id" => id,
-                  "action"=>{"type"=>"group", "grouped"=>[{"id"=>"998"}, {"id"=>withr2}]},
+                  "action"=>{"type"=>"group", "grouped"=>[{"id"=>"2"}, {"id"=>withr2}]},
                   "state"=>
                       {"name"=>"review",
                        "who"=>"king",
@@ -225,7 +225,7 @@ class GroupRequestTest < ActionDispatch::IntegrationTest
   end
 
   test "accept sub request" do
-    prepare_request_with_user "king", "sunflower"
+    login_king
     id = upload_request("group")
 
     # now one in review
@@ -247,14 +247,14 @@ class GroupRequestTest < ActionDispatch::IntegrationTest
   end
 
   test "search groups" do
-    prepare_request_with_user "king", "sunflower"
+    login_king
     upload_request("group")
 
-    get "/search/request?match=action/grouped/@id=997"
+    get "/search/request?match=action/grouped/@id=1"
     assert_response :success
     assert_xml_tag(:tag => "collection", :attributes => {:matches => "0"})
 
-    get "/search/request?match=action/grouped/@id=998"
+    get "/search/request?match=action/grouped/@id=2"
     assert_response :success
     assert_xml_tag(:tag => "collection", :attributes => {:matches => "1"})
   end

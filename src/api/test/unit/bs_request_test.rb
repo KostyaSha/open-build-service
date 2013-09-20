@@ -8,10 +8,6 @@ class BsRequestTest < ActiveSupport::TestCase
     User.current = users( :Iggy )
   end
 
-  def teardown
-    BsRequest.where("id not in (997, 998, 999, 1000)").each { |r| r.destroy }
-  end
-
   test "if create works" do
     xml = '<request>
               <action type="submit">
@@ -113,7 +109,8 @@ eos
     assert_equal xml, newxml
 
     wi = req.webui_infos(diffs: false)
-    assert_equal true, wi['is_target_maintainer']
+    # iggy is *not* target maintainer
+    assert_equal false, wi['is_target_maintainer']
     assert_equal wi['actions'][0], {:type=>:submit,
       :sprj=>"home:Iggy",
       :spkg=>"TestPack",
@@ -126,4 +123,17 @@ eos
     
   end
 
+  def check_user_targets(user, *trues)
+    User.current = User.find_by_login(user)
+    BsRequest.all.each do |r|
+      #puts r.render_xml
+      expect = trues.include?(r.id)
+      assert_equal expect, r.webui_infos(diffs: false)['is_target_maintainer'], "Request #{r.id} should have #{expect} in target_maintainer for #{user}"
+    end
+  end
+
+  test "request ownership" do
+    check_user_targets(:Iggy, 10)
+    check_user_targets(:adrian, 1, 1000)
+  end
 end

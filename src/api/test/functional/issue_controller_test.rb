@@ -3,6 +3,16 @@ require File.expand_path(File.dirname(__FILE__) + "/..") + "/test_helper"
 class IssueControllerTest < ActionDispatch::IntegrationTest
   fixtures :all
 
+  def setup
+    stub_request(:post, "http://bugzilla.novell.com/xmlrpc.cgi").to_timeout
+    super
+  end
+
+  def teardown
+    WebMock.reset!
+    super
+  end
+
   def test_get_issues
     # bugs are public atm. Secret stuff should not get imported.
     get '/issue_trackers'
@@ -13,7 +23,7 @@ class IssueControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
 
     # as user
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     get '/issue_trackers'
     assert_response :success
     get '/issue_trackers/bnc'
@@ -42,18 +52,18 @@ class IssueControllerTest < ActionDispatch::IntegrationTest
   end
 
   def test_get_issue_for_patchinfo_and_project
-    get '/source/Devel:BaseDistro:Update?view=issues'
+    get '/source/BaseDistro?view=issues'
     assert_response 401
-    get '/source/Devel:BaseDistro:Update/pack3?view=issues'
+    get '/source/BaseDistro/patchinfo?view=issues'
     assert_response 401
 
     # as user
-    prepare_request_with_user "Iggy", "asdfasdf"
-    get '/source/Devel:BaseDistro:Update/pack3?view=issues'
+    login_Iggy
+    get '/source/BaseDistro/patchinfo?view=issues'
     assert_response :success
     assert_xml_tag :parent => { :tag => 'issue' }, :tag => 'name', :content => "123456"
     assert_xml_tag :parent => { :tag => 'issue' }, :tag => 'tracker', :content => "bnc"
-    get '/source/Devel:BaseDistro:Update?view=issues'
+    get '/source/BaseDistro?view=issues'
     assert_response :success
     assert_xml_tag :parent => { :tag => 'issue' }, :tag => 'name', :content => "123456"
     assert_xml_tag :parent => { :tag => 'issue' }, :tag => 'tracker', :content => "bnc"
@@ -72,35 +82,44 @@ class IssueControllerTest < ActionDispatch::IntegrationTest
     assert_response 401
 
     # search via bug owner
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
+
     # running patchinfo search as done by webui
     get "/search/package/id", :match => '[issue/[@state="CLOSED" and owner/@login="fred"] and kind="patchinfo"]'
     assert_response :success
-    assert_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'Devel:BaseDistro:Update', :name => 'pack3' }
+    assert_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'BaseDistro', :name => 'patchinfo' }
+    get "/search/package/id", :match => '[issue/[@state="OPEN" and owner/@login="king"] and kind="patchinfo"]'
+    assert_response :success
+    assert_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'BaseDistro', :name => 'patchinfo' }
+
+    # validate that state and login are from same issue. NOT matching:
+    get "/search/package/id", :match => '[issue/[@state="CLOSED" and owner/@login="king"] and kind="patchinfo"]'
+    assert_response :success
+    assert_no_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'BaseDistro', :name => 'patchinfo' }
 
     get "/search/package/id", :match => 'issue/owner/@login="fred"'
     assert_response :success
-    assert_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'Devel:BaseDistro:Update', :name => 'pack3' }
+    assert_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'BaseDistro', :name => 'patchinfo' }
 
     # search for specific issue state, issue is in RESOLVED state actually
     get "/search/package/id", :match => 'issue/@state="OPEN"'
     assert_response :success
-    assert_no_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'Devel:BaseDistro:Update', :name => 'pack3' }
+    assert_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'BaseDistro', :name => 'patchinfo' }
 
     # running patchinfo search as done by webui
     get "/search/package/id", :match => '[kind="patchinfo" and issue/[@state="CLOSED" and owner/@login="fred"]]'
     assert_response :success
-    assert_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'Devel:BaseDistro:Update', :name => 'pack3' }
+    assert_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'BaseDistro', :name => 'patchinfo' }
 
     # test with not matching kind to verify that it does not match
     get "/search/package/id", :match => '[issue/[@state="CLOSED" and owner/@login="fred"] and kind="aggregate"]'
     assert_response :success
-    assert_no_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'Devel:BaseDistro:Update', :name => 'pack3' }
+    assert_no_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'BaseDistro', :name => 'patchinfo' }
 
     # search via bug issue id
     get "/search/package/id", :match => '[issue/[@name="123456" and @tracker="bnc"]]'
     assert_response :success
-    assert_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'Devel:BaseDistro:Update', :name => 'pack3' }
+    assert_xml_tag :parent => { :tag => "collection" }, :tag => "package", :attributes => { :project => 'BaseDistro', :name => 'patchinfo' }
   end
 
   def test_get_issue_for_linked_packages
@@ -112,7 +131,7 @@ Blah bnc#14\n
 Blubber bnc#15\n
 "
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/source/BaseDistro/pack1", :cmd => "branch", :target_project => "home:Iggy:branches:BaseDistro"
     assert_response :success
     put "/source/home:Iggy:branches:BaseDistro/pack1/file.changes", changes
@@ -231,7 +250,7 @@ Blah bnc#14\n
 Blubber bnc#15\n
 "
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/source/BaseDistro/pack1", :cmd => "branch", :target_project => "home:Iggy:branches:BaseDistro"
     assert_response :success
     put "/source/home:Iggy:branches:BaseDistro/pack1/file.changes", changes
@@ -271,7 +290,7 @@ Blah bnc#14\n
 Blubber bnc#15\n
 "
 
-    prepare_request_with_user "Iggy", "asdfasdf"
+    login_Iggy
     post "/source/BaseDistro/new_package", :cmd => "branch", :missingok => 1, :target_project => "home:Iggy:branches:BaseDistro"
     assert_response :success
     put "/source/home:Iggy:branches:BaseDistro/new_package/file.changes", changes
