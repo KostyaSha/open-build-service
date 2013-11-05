@@ -5,6 +5,8 @@ class PublishedControllerTest < ActionController::IntegrationTest
   fixtures :all
 
   def setup
+    run_scheduler( "i586" )
+    wait_for_publisher()
   end
 
   def test_index
@@ -61,5 +63,28 @@ class PublishedControllerTest < ActionController::IntegrationTest
     assert_response 400 #does not exist
   end
   # FIXME: this needs to be extended, when we have added binaries and bs_publisher to the test suite
+
+  def test_rpm_md_formats
+    # OBS is doing this usually right, but createrepo is quite flaky ...
+    prepare_request_with_user "adrian", "so_alone"
+    # default configured rpm-md
+    get "/published/home:adrian:ProtectionTest/repo/repodata"
+    assert_response :success
+    assert_no_xml_tag :tag => 'entry', :attributes => { :name => "filelists.xml.gz" }
+    assert_no_xml_tag :tag => 'entry', :attributes => { :name => "other.xml.gz" }
+    assert_no_xml_tag :tag => 'entry', :attributes => { :name => "primary.xml.gz" }
+    assert_xml_tag :tag => 'entry', :attributes => { :name => "repomd.xml" }
+    assert_match(/-filelists.xml.gz/, @response.body)
+    assert_match(/-other.xml.gz/, @response.body)
+    assert_match(/-primary.xml.gz/, @response.body)
+    # legacy configured rpm-md
+    get "/published/home:Iggy/10.2/repodata"
+    assert_response :success
+    assert_xml_tag :tag => 'entry', :attributes => { :name => "filelists.xml.gz" }
+    assert_xml_tag :tag => 'entry', :attributes => { :name => "other.xml.gz" }
+    assert_xml_tag :tag => 'entry', :attributes => { :name => "primary.xml.gz" }
+    assert_xml_tag :tag => 'entry', :attributes => { :name => "repomd.xml" }
+
+  end
 
 end
