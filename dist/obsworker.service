@@ -1,6 +1,6 @@
 [Unit]
 Description=OBS worker daemon
-After=syslog.target
+After=syslog.target network.target
 
 [Service]
 ExecStart=/usr/libexec/obsworker start
