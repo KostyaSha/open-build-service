@@ -1804,6 +1804,7 @@ sub copybuild {
   my $odir = "$reporoot/$oprojid/$orepoid/$arch/$opackid";
   mkdir_p($dir);
   my $needsign;
+  print "Listing odir '$odir':\n  ". join( '\n  ', ls($odir)) . "\n";
   for my $bin (grep {$_ ne 'status' && $_ ne 'reason' && $_ ne 'history' && !/^\./} ls($odir)) {
     if ($bin eq "updateinfo.xml" && $cgi->{'setupdateinfoid'}) {
       my $updateinfo = readxml("$odir/$bin", $BSXML::updateinfo);
@@ -1813,9 +1814,51 @@ sub copybuild {
       writexml("$dir/$bin", undef, $updateinfo, $BSXML::updateinfo);
     } else {
       $needsign = 1 if $bin =~ /\.(?:d?rpm|sha256|iso)$/;
-      link("$odir/$bin", "$dir/$bin") || die("link $odir/$bin $dir/$bin: $!\n");
+      if ($cgi->{'freezecopy'}){
+	#just to be safe, TODO: check and back to link()
+	print("Copying $odir/$bin to $dir/$bin");
+      	BSUtil::cp("$odir/$bin", "$dir/$bin");
+      } else {
+        link("$odir/$bin", "$dir/$bin") || die("link $odir/$bin $dir/$bin: $!\n");
+      }
     }
   }
+  if ( $cgi->{'freezecopy'}) {
+	BSUtil::touch("$dir/.freezecopy");
+	print("    >freezecopy!\n");
+	my $oprpa = "$reporoot/$oprojid/$orepoid/$arch";
+	my $metafile = "$oprpa/:meta/$packid";
+	if ( -e $metafile) {
+	       print "MRW: packing file $metafile in job\n";
+	       BSUtil::cp( $metafile, "$dir/$packid.meta");
+	} else {
+		print " no metafile $metafile to pack!\n";
+	}
+	   # :relsync and :relsyncmax are project-level files, not package-level files.
+	   # So, in copying the entire project, a copy of them will appear in each
+	   # package-level copy job.  This gets de-duplicated on the scheduler side.
+
+	for my $file (":relsync", ":relsync.max") {
+	   if ( -e "$oprpa/$file") {
+	       BSUtil::cp( "$oprpa/$file", "$dir/:relsync");
+	   }
+	}
+
+	for my $file ("history", "reason", "status") {
+	   if ( -e "$oprpa/$packid/$file") {
+	       BSUtil::cp( "$oprpa/$packid/$file", "$dir/:$file");
+	   }
+	}
+	   # And the build log
+	   if ( -e "$oprpa/:logfiles.success/$opackid") {
+	       BSUtil::cp( "$oprpa/:logfiles.success/$opackid", "$dir/:slogfile");
+	   }
+
+	   if ( -e "$oprpa/:logfiles.fail/$opackid") {
+	       BSUtil::cp( "$oprpa/:logfiles.fail/$opackid", "$dir/:flogfile");
+	   }
+  }
+
   my $info = {
     'project' => $projid,
     'repository' => $repoid,
@@ -3402,7 +3445,7 @@ my $dispatches = [
   '/build/$project/$repository/$arch/_jobhistory package* code:* limit:num?' => \&getjobhistory,
   'POST:/build/$project/$repository/$arch/_relsync' => \&postrelsync,
   '/build/$project/$repository/$arch/_relsync' => \&getrelsync,
-  'POST:/build/$project/$repository/$arch/$package cmd=copy oproject:project? opackage:package? orepository:repository? setupdateinfoid:? resign:bool?' => \&copybuild,
+  'POST:/build/$project/$repository/$arch/$package cmd=copy oproject:project? opackage:package? orepository:repository? setupdateinfoid:? resign:bool? freezecopy:bool?' => \&copybuild,
   'POST:/build/$project/$repository/$arch/$package' => \&uploadbuild,
   '!worker,rw /build/$project/$repository/$arch/$package:package_repository view:? binary:filename* nometa:bool? noajax:bool? nosource:bool?' => \&getbinarylist,
   'POST:/build/$project/$repository/$arch/$package_repository/_buildinfo add:* internal:bool? debug:bool? deps:bool?' => \&getbuildinfo_post,

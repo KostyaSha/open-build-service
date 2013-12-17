@@ -4939,6 +4939,7 @@ sub copyproject {
   $user = str2utf8xml($user);
   $comment = str2utf8xml($comment);
 
+  my $freezecopy = $cgi->{'withhistory'} && !$cgi->{'makeolder'} ? 1 : 0;
   # copy _project data
   if (-e "$projectsdir/$oprojid.pkg/_project.rev" || -e "$projectsdir/$oprojid.conf") {
     my $lastorev = getrev($oprojid, '_project');
@@ -4988,12 +4989,22 @@ sub copyproject {
 	my $treedir = $BSConfig::nosharedtrees ? "$treesdir/$projid/$packid" : "$treesdir/$packid";
 	if ($BSConfig::nosharedtrees) {
 	  my $treedir = "$treesdir/$projid/$packid";
-	  for my $rev (@allrevs) {
-	    next if -e "$treedir/$rev->{'srcmd5'}-MD5SUMS";
-	    my $files = lsrev({ %$rev, 'project' => $oprojid, 'package' => $packid });
-	    copyfiles($projid, $packid, $oprojid, $packid, $files);
-	    addmeta($projid, $packid, $files);
-	  }
+		# skip manipulations with .rev and copy all MD5SUMS.
+		# Will also copy MD5SUMS with src package meta changes...
+		if ($freezecopy) {     
+			print("treedir $treedir\n");
+			for my $file ( BSUtil::ls("$treesdir/$oprojid/$packid")) {
+				print("copying $file to $treedir/$file\n");
+				BSUtil::cp("$treesdir/$oprojid/$packid/$file", "$treedir/$file");
+			}
+		}	else {
+		  for my $rev (@allrevs) {
+		    next if -e "$treedir/$rev->{'srcmd5'}-MD5SUMS";
+		    my $files = lsrev({ %$rev, 'project' => $oprojid, 'package' => $packid });
+		    copyfiles($projid, $packid, $oprojid, $packid, $files);
+		    addmeta($projid, $packid, $files);
+		  }
+		}
 	}
 	BSFileDB::fdb_add_multiple("$projectsdir/$projid.pkg/$packid.rev", $srcrevlay, @allrevs);
 	$lastorev = $allrevs[-1];
@@ -5036,12 +5047,15 @@ sub copyproject {
       $newrev->{'requestid'} = $cgi->{'requestid'};
       $newrev->{'time'} = time();
       if ($cgi->{'makeolder'}) {
-	$newrev->{'vrev'} =~ s/(\d+)$/($1+1).".1"/e;
-      } else {
-	$newrev->{'vrev'} =~ s/(\d+)$/$1+1/e;
+				$newrev->{'vrev'} =~ s/(\d+)$/($1+1).".1"/e;
+      } elsif (!$freezecopy) {
+				$newrev->{'vrev'} =~ s/(\d+)$/$1+1/e;
       }
       delete $newrev->{'rev'};
-      $newrev = BSFileDB::fdb_add_i("$projectsdir/$projid.pkg/$packid.rev", $srcrevlay, $newrev);
+			# skip new entry
+			if (!$freezecopy) {
+      	$newrev = BSFileDB::fdb_add_i("$projectsdir/$projid.pkg/$packid.rev", $srcrevlay, $newrev);
+			}
       updatelinkinfodb($projid, $packid, { %$newrev, 'project' => $oprojid, 'package' => $packid }, $files);
       if ($cgi->{'makeolder'}) {
 	$lastorev->{'user'} = $user;
@@ -5053,7 +5067,7 @@ sub copyproject {
 	$lastorev = BSFileDB::fdb_add_i("$projectsdir/$oprojid.pkg/$packid.rev", $srcrevlay, $lastorev);
       }
     }
-    # XXX: does this make any sense?
+    # XXX: does this make any sense? Sure!
     if ($cgi->{'withbinaries'}) {
       for my $repo (@{$proj->{'repository'} || []}) {
 	my $orepo = (grep {$_->{'name'} eq $repo->{'name'}} @{$oproj->{'repository'} || []})[0];
@@ -5068,6 +5082,7 @@ sub copyproject {
 	  push @args, "opackage=$packid"; # same package name
 	  push @args, "orepository=$repo->{'name'}"; # same repo name
 	  push @args, 'resign=1' if $cgi->{'resign'};
+	  push @args, "freezecopy=1" if $cgi->{'withbinaries'} && $cgi->{'withhistory'} && !$cgi->{'makeolder'};
 	  my $param = {
 	    'uri' => "$BSConfig::reposerver/build/$projid/$repo->{'name'}/$arch/$packid",
 	    'request' => 'POST',

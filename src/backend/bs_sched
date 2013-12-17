@@ -3717,7 +3717,75 @@ sub uploadbuildevent {
   my $useforbuildenabled = 1;
   $useforbuildenabled = enabled($repoid, $projpacks->{$projid}->{'useforbuild'}, $useforbuildenabled);
   $useforbuildenabled = enabled($repoid, $pdata->{'useforbuild'}, $useforbuildenabled);
-  update_dst_full($prp, $packid, $dst, $jobdatadir, undef, $useforbuildenabled, $prpsearchpath{$prp});
+  my $metafile = undef;
+  # Modifications for one in one copy. 
+  # Note, scheduler start build after first copied package.
+  if ( -e "$jobdatadir/.freezecopy" ) {
+    print("Doing freezecopy!\n");
+    if ( -e "$jobdatadir/$packid.meta") {
+  	  mkdir_p( "$gdst/:meta") unless -d "$gdst/:meta";
+  	  my $targetMeta = "$gdst/:meta/$packid";
+      print "freezecopy: $jobdatadir/$packid.meta exists\n";
+      rename( "$jobdatadir/$packid.meta", $targetMeta) ||
+		    die( "freezecopy: Unable to rename metafile \"$gdst/:meta/$packid\": $!");
+		  $metafile = $targetMeta;
+	  } else {
+	      print "freezecopy: no metafile $jobdatadir/$packid.meta\n";
+	  }
+
+    #project specific files, replace every time to exclude scheduler modifications?
+    for my $file (':relsync', ':relsync.max') {
+      if ( -e "$jobdatadir/$file") {
+        if ( ! -e "$gdst/$file") {
+          rename( "$jobdatadir/$file", "$gdst/$file") || 
+            die( "freezecopy: Unable to rename relsync file \"$gdst/$file\": $!");
+        } else {
+          unlink( "$jobdatadir/$file");
+        }
+      }
+    }
+
+    #package specific files
+    for my $file ('history', 'reason', 'status') { 
+      if ( -e "$jobdatadir/:$file") {
+        my $dfile = "$gdst/$packid/$file";
+        if ( -e $dfile) {
+          print("freezecopy: History file in target for copy already exists. Not overwriting.\n");
+        } else {
+          rename( "$jobdatadir/:$file", $dfile) || die( "freezecopy: Unable to rename :history file \"$dfile\": $!");
+        }
+      }
+    }
+
+	  if ( -e "$jobdatadir/:slogfile") {
+    mkdir_p("$gdst/:logfiles.success") unless -d "$gdst/:logfiles.success";
+    my $logfile = "$gdst/:logfiles.success/$packid";
+		  if ( -e $logfile) {
+		      print("freezecopy: Success log file in target for copy already exists. Not overwriting.\n");
+		  } else {
+		      rename( "$jobdatadir/:slogfile", $logfile) || 
+            die( "freezecopy: Unable to rename :slogfile file \"$logfile\": $!");
+		      link( $logfile, "$gdst/$packid/logfile") || 
+            die("freezecopy: Unable link \"$gdst/$packid/logfile\"\n: $!");
+		  }
+	  }
+
+	  if ( -e "$jobdatadir/:flogfile") {
+      mkdir_p("$gdst/:logfiles.fail") unless -d "$gdst/:logfiles.fail";
+      my $logfile = "$gdst/:logfiles.fail/$packid";
+      if ( -e $logfile) {
+        print("freezecopy: Failure log file in target for copy already exists. Not overwriting.\n");
+      } else {
+        rename( "$jobdatadir/:flogfile", $logfile) || 
+          die( "freezecopy: Unable to rename :flogfile file \"$logfile\": $!");
+        link( $logfile, "$gdst/$packid/logfile") || 
+          die("freezecopy: Unable link \"$gdst/$packid/logfile\"\n: $!");
+			}
+    }
+   unlink("$jobdatadir/.freezecopy");
+  }
+
+  update_dst_full($prp, $packid, $dst, $jobdatadir, $metafile, $useforbuildenabled, $prpsearchpath{$prp});
   $changed->{$prp} = 2 if $useforbuildenabled;
   delete $repounchanged{$prp} if $useforbuildenabled;
   $repounchanged{$prp} = 2 if $repounchanged{$prp};
