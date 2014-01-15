@@ -1840,7 +1840,7 @@ sub copybuild {
 
 	for my $file (":relsync", ":relsync.max") {
 	   if ( -e "$oprpa/$file") {
-	       BSUtil::cp( "$oprpa/$file", "$dir/:relsync");
+	       BSUtil::cp( "$oprpa/$file", "$dir/$file");
 	   }
 	}
 
