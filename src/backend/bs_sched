@@ -3793,6 +3793,52 @@ sub uploadbuildevent {
   unlink("$reporoot/$prp/$myarch/:repodone");
 }
 
+sub uploadrepoevent {
+  my ($ectx, $job, $js) = @_;
+
+  my $changed = $ectx->{'changed_med'};
+  my $info = readxml("$myjobsdir/$job", $BSXML::buildinfo, 1);
+  my $jobdatadir = "$myjobsdir/$job:dir";
+  if (!$info || ! -d $jobdatadir) {
+    print "  - $job is bad\n";
+    return;
+  }
+  my $projid = $info->{'project'};
+  my $repoid = $info->{'repository'};
+  if ($info->{'arch'} ne $myarch) {
+    print "  - $job has bad arch\n";
+    return;
+  }
+  if (!$projpacks->{$projid}) {
+    print "  - $job belongs to an unknown project\n";
+    return;
+  }
+  my $prp = "$projid/$repoid";
+  my $gdst = "$reporoot/$prp";
+  if (-d "$gdst.tmp") {
+    system('rm', '-rf', "$gdst.tmp") && die("Removing of $gdst"."tmp failed!\n");
+  }
+  if (-e $gdst) {
+    rename($gdst, "$gdst.old") || die("Can't rename $gdst to $gdst.old\n");
+  }
+  print("Moving uploaded repo\n");
+  if (! system("mv $jobdatadir $gdst.tmp")) {
+    print("Failed mv $jobdatadir $gdst.tmp! Fallback...\n");
+    rename("$gdst.old", "$gdst") || die("Can't fallback, repository ruined!\n");
+  }
+  if (rename("$gdst.tmp", $gdst)) {
+    print("Can't rename! Fallback old...\n");
+    rename("$gdst.old", "$gdst") || die("Can't fallback, repository ruined!\n");
+  }
+  my @archs = grep {-d "$gdst/$_"} ls($gdst);
+  for my $a (@archs) {
+    print "$a, ";
+#TODO add scanrepo event
+#    write_event($projid, $repoid, $a, 'scanrepo');
+  } 
+
+}
+
 sub importevent {
   my ($ectx, $job, $js) = @_;
 
@@ -5890,6 +5936,8 @@ sub event_built {
     jobfinished($ectx, $job, $js);
   } elsif ($ev->{'type'} eq 'uploadbuild') {
     uploadbuildevent($ectx, $job, $js);
+  } elsif ($ev->{'type'} eq 'uploadrepo') {
+    uploadrepoevent($ectx, $job, $js);
   } elsif ($ev->{'type'} eq 'import') {
     importevent($ectx, $job, $js);
   }

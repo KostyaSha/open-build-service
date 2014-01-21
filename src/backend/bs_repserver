@@ -1882,6 +1882,95 @@ sub copybuild {
   return $BSStdServer::return_ok;
 }
 
+sub clonerepo {
+  my ($cgi, $projid, $repoid, $arch) = @_;
+  my $oprojid = defined($cgi->{'oproject'}) ? $cgi->{'oproject'} : $projid;
+  my $orepoid = defined($cgi->{'orepository'}) ? $cgi->{'orepository'} : $repoid;
+  return $BSStdServer::return_ok if $oprojid eq $projid && $orepoid eq $repoid;
+  return $BSStdServer::return_ok unless -d "$reporoot/$oprojid/$orepoid/$arch";
+  my $job = "copy-".Digest::MD5::md5_hex("$$/$projid/$repoid/$arch".time());
+  local *F;
+  my $jobstatus = {
+    'code' => 'finished',
+  };
+  mkdir_p("$jobsdir/$arch") unless -d "$jobsdir/$arch";
+  if (!BSUtil::lockcreatexml(\*F, "$jobsdir/$arch/.$job:status", "$jobsdir/$arch/$job:status", $jobstatus, $BSXML::jobstatus)) {
+    die("job lock failed\n");
+  }
+  my $dir = "$jobsdir/$arch/$job:dir";
+  mkdir_p($dir);
+  my $needsign;
+  my $sdir = "$reporoot/$oprojid/$orepoid";
+  for my $arch (grep {-d "$sdir/$_"} ls($sdir)) {
+    my $odir = "$sdir/$arch";
+		for my $entry (ls($odir)) {
+		# updateinfo, resign is not handled. Clone repo but with right hardlinks
+			if (-f "$odir/$entry" && $entry =~ /^:(?!repodone)/ ) {
+				print("Copying $odir/$entry to $dir/$entry");
+				BSUtil::cp("$odir/$entry", "$dir/$entry");
+			} elsif (-f "$odir/$entry") {
+				#link("$odir/$entry", "$dir/$entry") || die("link $odir/$entry $dir/$entry: $!\n");
+				die("Unknown file $entry in repo!\n");
+			} elsif (-d "$odir/$entry" && $entry =~ /^:logfiles/) {
+				# dst content will be hardlinked later
+			} elsif (-d "$odir/$entry" && $entry =~ /^:meta$/) {
+				# no BSUtil?
+				system("cp $odir/$entry $dir/$entry") && die("Can't cp $odir/$entry $dir/$entry $!\n");
+			} elsif (-d "$odir/$entry" && $entry =~ /^:repo$/) {
+				mkdir_p("$dir/$entry");
+				for my $pentry (ls("$odir/$entry")) {
+						link("$odir/$entry/$pentry", "$dir/$entry/$pentry") || die("link $odir/$entry/$pentry $dir/$entry/$pentry: $!\n");
+				}
+			} elsif (-d "$odir/$entry") {
+				mkdir_p("$dir/$entry");
+				for my $pentry (ls("$odir/$entry")) {
+					if (-f "$odir/$entry/$pentry" && $pentry =~ /(?:status|reason|history|logfile)/) {
+						print("Copying $odir/$entry/$pentry to $dir/$entry/$pentry");
+						BSUtil::cp("$odir/$entry/$pentry", "$dir/$entry/$pentry");
+					} elsif (-f "$odir/$entry/$pentry") {
+						#must be binary
+						link("$odir/$entry/$pentry", "$dir/$entry/$pentry") || die("FAIL: link $odir/$entry/$pentry $dir/$entry/$pentry: $!\n");
+					} else {
+						die("Unkown pentry $pentry!\n");
+					}
+                               }
+			} else {
+				die("Uknown entry $entry\n");
+			}
+			# now hardlink dst logfile
+			for my $logdir (":logfiles.success", ":logfiles.fail"){ 
+				if ( -e "$odir/$logdir") {
+					mkdir_p("$dir/$logdir");
+					for my $packid (ls("$odir/$logdir")) {
+						link("$dir/$packid/logfile", "$dir/$logdir/$packid") || die("FAIL: $dir/$packid/logfile $dir/$logdir/$packid: $!\n");
+					}
+				}
+			}
+    }
+  }
+
+  my $info = {
+    'project' => $projid,
+    'repository' => $repoid,
+    'arch' => $arch,
+    'job' => $job,
+  };
+  writexml("$jobsdir/$arch/.$job", "$jobsdir/$arch/$job", $info, $BSXML::buildinfo);
+  my $ev = {'type' => 'uploadrepo', 'arch' => $arch, 'job' => $job};
+  if ($BSConfig::sign && $cgi->{'resign'} && $needsign) {
+    $jobstatus->{'code'} = 'signing';
+    writexml("$jobsdir/$arch/.$job:status", "$jobsdir/$arch/$job:status", $jobstatus, $BSXML::jobstatus);
+    $arch = 'signer';
+  }
+  close F;
+  dirty($projid, $repoid, $arch) if $arch ne 'signer';
+  mkdir_p("$eventdir/$arch");
+  writexml("$eventdir/$arch/.copybuild:$job$$", "$eventdir/$arch/copybuild:$job", $ev, $BSXML::event);
+  ping($arch);
+  return $BSStdServer::return_ok;
+
+}
+
 sub uploadbuild {
   my ($cgi, $projid, $repoid, $arch, $packid) = @_;
   my $job = "upload-".Digest::MD5::md5_hex("$$/$projid/$repoid/$arch/$packid".time());
@@ -3445,6 +3534,7 @@ my $dispatches = [
   '/build/$project/$repository/$arch/_jobhistory package* code:* limit:num?' => \&getjobhistory,
   'POST:/build/$project/$repository/$arch/_relsync' => \&postrelsync,
   '/build/$project/$repository/$arch/_relsync' => \&getrelsync,
+  'POST:/build/$project/$repository/$arch cmd=copy oproject:project? orepository:repository? setupdateinfoid:? resign:bool? freezecopy:bool?' => \&clonerepo,
   'POST:/build/$project/$repository/$arch/$package cmd=copy oproject:project? opackage:package? orepository:repository? setupdateinfoid:? resign:bool? freezecopy:bool?' => \&copybuild,
   'POST:/build/$project/$repository/$arch/$package' => \&uploadbuild,
   '!worker,rw /build/$project/$repository/$arch/$package:package_repository view:? binary:filename* nometa:bool? noajax:bool? nosource:bool?' => \&getbinarylist,
