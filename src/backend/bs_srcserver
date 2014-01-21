@@ -5070,28 +5070,66 @@ sub copyproject {
   }
   # XXX: does this make any sense? Sure!
   if ($cgi->{'withbinaries'}) {
-    for my $repo (@{$proj->{'repository'} || []}) {
+    my $reporoot = "$BSConfig::bsdir/build";
+    #clone all repos
+    for my $repo (@{$proj->{'repository'} || []}) { 
       my $orepo = (grep {$_->{'name'} eq $repo->{'name'}} @{$oproj->{'repository'} || []})[0];
-      next unless $orepo;
+      next unless $orepo;  
+      print("Cloning repo:$orepo->{'name'}\n"); 
       for my $arch (@{$repo->{'arch'} || []}) {
         next unless grep {$_ eq $arch} @{$orepo->{'arch'} || []};
-
-        # same source and target repo/arch in both projects exists
-        my @args;
-        push @args, "cmd=copy";
-        push @args, "oproject=$oprojid";
-        push @args, "orepository=$repo->{'name'}"; # same repo name
-        push @args, 'resign=1' if $cgi->{'resign'};
-        push @args, "freezecopy=1" if $cgi->{'withbinaries'} && $cgi->{'withhistory'} && !$cgi->{'makeolder'};
-        my $param = {
-          'uri' => "$BSConfig::reposerver/build/$projid/$repo->{'name'}/$arch",
-          'request' => 'POST',
-        };
-        eval {
-          # ignore failures for now
-          BSWatcher::rpc($param, undef, @args);
-        };
-        warn($@) if $@;
+        print("Cloning repo:$orepo->{'name'}, arch:$arch\n");
+        my $odir = "$reporoot/$oprojid/$orepo->{'name'}/$arch"; # src
+        my $dir = "$reporoot/$projid/$orepo->{'name'}/$arch"; # dst
+        mkdir_p("$dir") unless -d "$dir";
+        for my $entry (ls($odir)) {
+          #print("DEBUG: entry $entry in $odir");
+          # updateinfo, resign is not handled. Clone repo but with right hardlinks
+          if (-f "$odir/$entry" && $entry =~ /^:repodone$/) {
+            #skip this file for publishing
+          } elsif (-f "$odir/$entry" && $entry =~ /^:/) {
+            print("Copying $odir/$entry to $dir/$entry\n");
+            BSUtil::cp("$odir/$entry", "$dir/$entry");
+          } elsif (-f "$odir/$entry") {
+            #link("$odir/$entry", "$dir/$entry") || die("link $odir/$entry $dir/$entry: $!\n");
+            die("Unknown file $entry in repo!\n");
+          } elsif (-d "$odir/$entry" && $entry =~ /^:logfiles/) {
+            print("Skipping $entry\n");
+            # dst content will be hardlinked later
+          } elsif (-d "$odir/$entry" && $entry =~ /^:meta$/) {
+            # no BSUtil?
+            system("cp -r $odir/$entry $dir/$entry") && die("Can't cp -r $odir/$entry $dir/$entry $!\n");
+          } elsif (-d "$odir/$entry" && $entry =~ /^:repo$/) {
+            mkdir_p("$dir/$entry") unless -d "$dir/$entry";
+            for my $pentry (ls("$odir/$entry")) {
+              link("$odir/$entry/$pentry", "$dir/$entry/$pentry") || die("FAIL: link $odir/$entry/$pentry $dir/$entry/$pentry: $!\n");
+            }
+          } elsif (-d "$odir/$entry") {
+            mkdir_p("$dir/$entry") unless -d "$dir/$entry";
+            for my $pentry (ls("$odir/$entry")) {
+              if (-f "$odir/$entry/$pentry" && $pentry =~ /(?:status|reason|history|logfile)/) {
+                print("Copying $odir/$entry/$pentry to $dir/$entry/$pentry\n");
+                BSUtil::cp("$odir/$entry/$pentry", "$dir/$entry/$pentry");
+              } elsif (-f "$odir/$entry/$pentry") {
+                #must be binary
+                link("$odir/$entry/$pentry", "$dir/$entry/$pentry") || die("FAIL: link $odir/$entry/$pentry $dir/$entry/$pentry: $!\n");
+              } else {
+                die("Unkown pentry $pentry!\n");
+              }
+            }
+          } else {
+            die("Uknown entry $entry\n");
+          }
+        }
+        # now hardlink dst logfile
+        for my $logdir (":logfiles.success", ":logfiles.fail"){ 
+          if ( -e "$odir/$logdir") {
+            mkdir_p("$dir/$logdir") unless -d "$dir/$logdir";
+            for my $packid (ls("$odir/$logdir")) {
+              link("$dir/$packid/logfile", "$dir/$logdir/$packid") || die("FAIL: $dir/$packid/logfile $dir/$logdir/$packid: $!\n");
+            }
+          }
+        }
       }
     }
   }
