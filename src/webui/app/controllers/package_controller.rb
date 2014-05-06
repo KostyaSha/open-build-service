@@ -781,7 +781,7 @@ class PackageController < ApplicationController
       @repository = repository
       @arch = arch
       @offset = 0
-      @maxsize = 1024 * 256
+      @maxsize = 1024 * 1024 * 25
     end
 
     def each
